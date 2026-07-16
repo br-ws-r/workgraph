@@ -60,7 +60,7 @@ class McpClient {
 
     await this._rawPost(
       { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
-      this.sessionId,
+      this.sessionId ?? undefined,
       signal,
     );
   }

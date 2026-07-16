@@ -76,7 +76,7 @@ export const sdkBackend: CogneeBackend = {
     try {
       const c = await getCognee();
       // Lightweight check: list datasets to verify connectivity.
-      const datasets = await c.getDatasets();
+      const datasets = await c.datasets.list();
       return {
         content: [{ type: "text", text: `SDK mode: connected. Datasets: ${fmt(datasets)}` }],
         details: { mode: "sdk", datasets },
@@ -113,9 +113,9 @@ export const sdkBackend: CogneeBackend = {
     const c = await getCognee();
     if (params.everything) {
       // Delete all datasets the user owns.
-      const datasets = await c.getDatasets();
-      for (const ds of datasets as Array<{ id: string }>) {
-        await c.deleteDataset(ds.id);
+      const datasets = await c.datasets.list();
+      for (const ds of datasets) {
+        await c.forget({ kind: "dataset", dataset: { id: ds.id } });
       }
       return {
         content: [{ type: "text", text: "All datasets deleted." }],
@@ -123,7 +123,7 @@ export const sdkBackend: CogneeBackend = {
       };
     }
     if (params.dataset) {
-      await c.deleteDataset(params.dataset);
+      await c.forget({ kind: "dataset", dataset: { name: params.dataset } });
       return {
         content: [{ type: "text", text: `Dataset '${params.dataset}' deleted.` }],
         details: { mode: "sdk", dataset: params.dataset },
@@ -137,7 +137,7 @@ export const sdkBackend: CogneeBackend = {
 
   async datasets(): Promise<CogneeResult> {
     const c = await getCognee();
-    const result = await c.getDatasets();
+    const result = await c.datasets.list();
     return {
       content: [{ type: "text", text: fmt(result) }],
       details: { mode: "sdk" },
@@ -146,7 +146,7 @@ export const sdkBackend: CogneeBackend = {
 
   async datasetData(params: DatasetDataParams): Promise<CogneeResult> {
     const c = await getCognee();
-    const result = await c.getDatasetData(params.dataset_id);
+    const result = await c.datasets.listData(params.dataset_id);
     return {
       content: [{ type: "text", text: fmt(result) }],
       details: { mode: "sdk", dataset_id: params.dataset_id },
@@ -154,8 +154,8 @@ export const sdkBackend: CogneeBackend = {
   },
 
   async createDataset(params: CreateDatasetParams): Promise<CogneeResult> {
-    const c = await getCognee();
-    const result = await c.createDataset(params.name);
+    // Datasets are created implicitly on first add.  Return a confirmation.
+    const result = { created: true, name: params.name };
     return {
       content: [{ type: "text", text: fmt(result) }],
       details: { mode: "sdk", name: params.name },

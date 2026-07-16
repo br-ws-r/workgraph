@@ -56,7 +56,7 @@ export default function (pi: ExtensionAPI) {
 
       ctx.ui.notify(
         `Cognee mode → ${mode.toUpperCase()}.  Use /reload to re-register tools with the new backend.`,
-        "success",
+        "info",
       );
     },
   });
@@ -81,7 +81,7 @@ export default function (pi: ExtensionAPI) {
         // Show one key.
         const key = parts[0];
         if (key in cfg) {
-          const val = (cfg as Record<string, unknown>)[key];
+          const val = (cfg as unknown as Record<string, unknown>)[key];
           const display = key === "llmApiKey" && typeof val === "string" ? "***" : val;
           ctx.ui.notify(`${key} = ${JSON.stringify(display)}`, "info");
         } else {
@@ -111,7 +111,7 @@ export default function (pi: ExtensionAPI) {
       resetInstance();
       clearMcpCache();
 
-      ctx.ui.notify(`${key} → ${key === "llmApiKey" ? "***" : value}`, "success");
+      ctx.ui.notify(`${key} → ${key === "llmApiKey" ? "***" : value}`, "info");
     },
   });
 }
