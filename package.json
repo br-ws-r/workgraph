@@ -1,0 +1,56 @@
+{
+  "name": "@kerryhatcher/pi-cognee",
+  "version": "0.1.0",
+  "description": "Pi extension for Cognee AI memory — supports both direct SDK and MCP bridge modes. Remember, recall, forget, and manage knowledge graphs from your coding agent.",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "cognee",
+    "memory",
+    "knowledge-graph",
+    "rag",
+    "agent-memory",
+    "graphrag"
+  ],
+  "license": "MIT",
+  "author": "Kerry Hatcher",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kerryhatcher/pi-cognee.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kerryhatcher/pi-cognee/issues"
+  },
+  "homepage": "https://github.com/kerryhatcher/pi-cognee#readme",
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "index.ts",
+    "index.js",
+    "index.d.ts",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "dependencies": {
+    "@cognee/cognee-ts": "^0.1.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}
