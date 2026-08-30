@@ -8,6 +8,7 @@ export interface MulticaIssue {
   title?: string;
   status?: string;
   parent_issue_id?: string | null;
+  project_id?: string | null;
   updated_at?: string;
   [key: string]: unknown;
 }
