@@ -1,84 +1,80 @@
-# pi-cognee
+# Workgraph
 
-Cognee AI memory for [Pi](https://github.com/earendil-works/pi-coding-agent) — your coding agent with persistent, queryable knowledge graph memory.
+Workgraph is an opinionated initiative-scoped knowledge graph and durable agent
+memory. It deliberately assumes **Pi** as the agent runtime, **Multica** as the
+authoritative workflow system, and **Cognee** as the semantic memory backend.
+It is not a generic personal-memory package.
 
-Two backends, one interface:
+Multica owns initiatives, issues, tasks, assignment, workflow state, runs, and
+handoffs. GitHub owns pull-request and delivery state. Workgraph stores bounded
+context, provenance, relationships, and a chronological delivery outbox; it
+must never override fresh Multica or GitHub state.
 
-| Mode | How | Best for |
-|------|-----|----------|
-| **SDK** (default) | In-process via `@cognee/cognee-ts` | Zero-infrastructure, works out of the box |
-| **MCP** | Remote Cognee MCP server | Shared memory across agents, self-hosted |
+## Core contract
 
-## Install
+- One root Multica issue UUID maps to exactly one Cognee dataset:
+  `brwsr-initiative-<uuid>`.
+- A Pi process locks one verified initiative at `session_start`. It cannot
+  switch datasets later.
+- Managed runs resolve `MULTICA_TASK_ID` through Multica's read-only task and
+  persisted parent chain. Interactive Pi can use `--initiative <root-uuid>` or
+  choose a recent root issue.
+- Unavailable or ambiguous Multica state becomes `No initiative`: Pi continues,
+  while all recall and writes remain disabled.
+- Cognee failures never block Pi. Pending writes remain in the SQLite outbox.
+- No delete, global recall, arbitrary dataset, transcript, or unrestricted tool
+  capture operation is exposed.
+
+## Runtime configuration
+
+Credentials are accepted only from the process environment:
+
+```text
+COGNEE_SERVICE_URL=https://api.cognee.ai
+COGNEE_API_KEY=<secret>
+COGNEE_AUTH_SCHEME=x-api-key
+WORKGRAPH_DATA_DIR=/srv/data/cognee/outbox
+```
+
+For an authenticated self-hosted service, use its loopback URL and set
+`COGNEE_AUTH_SCHEME=bearer` when the credential is a bearer token. Do not put
+credentials in Pi JSON, the repository, or the outbox.
+
+Install as a Pi package after building:
 
 ```bash
-pi install npm:@kerryhatcher/pi-cognee
+npm ci
+npm run check
+pi install /absolute/path/to/workgraph
 ```
 
-## Quick Start (SDK mode)
+Workgraph registers `initiative_memory_status`, `initiative_memory_recall`,
+`initiative_memory_remember`, and `initiative_timeline`. None accepts a dataset
+parameter.
 
-SDK mode works immediately — no server needed. Just set your LLM API key:
+## Cognee client decision
+
+The public `@cognee/cognee-ts` releases are embedded Rust/Neon bindings. They
+do not export the documented `serve({ url, apiKey })`; upstream places that
+remote bridge in a closed cloud package. Workgraph therefore uses Cognee's
+official `/api/v1` HTTP API through a small typed transport. It implements no
+retrieval, embeddings, graph extraction, or ontology engine. Endpoint-routing
+tests prove every semantic operation uses `COGNEE_SERVICE_URL` and the locked
+dataset. A future public remote SDK can replace this transport without changing
+the Workgraph runtime contract.
+
+## Development
 
 ```bash
-# In pi:
-/cognee-config llmApiKey sk-...
-/cognee-config llmModel gpt-4o-mini
+npm ci
+npm run check
 ```
 
-Then start using memory:
+The canonical vocabulary and record envelope are documented in
+[`docs/initiative-memory-ontology.md`](docs/initiative-memory-ontology.md).
 
-```
-> Remember this: the project uses Postgres with Prisma ORM
-> What database does this project use?
-```
+## Provenance
 
-## MCP Mode
-
-If you run a [Cognee MCP server](https://github.com/topoteretes/cognee), switch to MCP mode:
-
-```bash
-/cognee-mode mcp
-/cognee-config mcpUrl http://localhost:8001/mcp
-```
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `/cognee-mode [sdk\|mcp]` | Switch backend mode |
-| `/cognee-config` | Show all config |
-| `/cognee-config <key>` | Show one config value |
-| `/cognee-config <key> <value>` | Set a config value |
-
-## Tools
-
-All tools work identically in both modes:
-
-| Tool | Description |
-|------|-------------|
-| `cognee_health` | Check connectivity |
-| `cognee_remember` | Store text in memory |
-| `cognee_recall` | Search memory |
-| `cognee_forget` | Delete datasets or all memory |
-| `cognee_datasets` | List datasets |
-| `cognee_dataset_data` | List items in a dataset |
-| `cognee_create_dataset` | Create a new dataset |
-| `cognee_client_info` | Show client identity and mode |
-| `cognee_cognify_file` | Ingest a file (base64) |
-
-## Config Keys
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `mode` | `sdk` | Backend mode: `sdk` or `mcp` |
-| `mcpUrl` | `http://localhost:8001/mcp` | MCP server URL |
-| `llmModel` | — | LLM model (SDK mode) |
-| `llmApiKey` | — | LLM API key (SDK mode) |
-| `embeddingProvider` | — | Embedding provider (SDK mode) |
-| `embeddingModel` | — | Embedding model (SDK mode) |
-| `vectorDbProvider` | — | Vector DB provider (SDK mode) |
-| `graphDbProvider` | — | Graph DB provider (SDK mode) |
-
-## License
-
-MIT
+This repository is a fork of `@kerryhatcher/pi-cognee` and retains its MIT
+license. Workgraph replaces the upstream generic SDK/MCP and destructive tool
+surface with the initiative-scoped architecture described above.

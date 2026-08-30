@@ -1,56 +1,42 @@
 {
-  "name": "@kerryhatcher/pi-cognee",
+  "name": "@br-ws-r/workgraph",
   "version": "0.1.0",
-  "description": "Pi extension for Cognee AI memory — supports both direct SDK and MCP bridge modes. Remember, recall, forget, and manage knowledge graphs from your coding agent.",
+  "description": "Opinionated initiative-scoped knowledge graph and durable memory for Pi runs managed by Multica",
   "type": "module",
-  "main": "index.js",
-  "types": "index.d.ts",
-  "keywords": [
-    "pi-package",
-    "pi",
-    "cognee",
-    "memory",
-    "knowledge-graph",
-    "rag",
-    "agent-memory",
-    "graphrag"
-  ],
   "license": "MIT",
-  "author": "Kerry Hatcher",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/kerryhatcher/pi-cognee.git"
+  "engines": { "node": ">=22.0.0" },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./pi": { "types": "./dist/src/pi.d.ts", "import": "./dist/src/pi.js" }
   },
-  "bugs": {
-    "url": "https://github.com/kerryhatcher/pi-cognee/issues"
-  },
-  "homepage": "https://github.com/kerryhatcher/pi-cognee#readme",
-  "pi": {
-    "extensions": ["./index.ts"]
-  },
-  "publishConfig": {
-    "access": "public"
-  },
-  "files": [
-    "index.ts",
-    "index.js",
-    "index.d.ts",
-    "src/",
-    "README.md",
-    "LICENSE"
-  ],
+  "pi": { "extensions": ["./dist/src/pi.js"] },
+  "files": ["dist", "docs", "README.md", "LICENSE", "CHANGELOG.md"],
+  "repository": { "type": "git", "url": "git+https://github.com/br-ws-r/workgraph.git" },
+  "bugs": { "url": "https://github.com/br-ws-r/workgraph/issues" },
+  "homepage": "https://github.com/br-ws-r/workgraph#readme",
+  "keywords": ["pi-package", "multica", "cognee", "knowledge-graph", "agent-memory"],
   "scripts": {
-    "build": "tsc",
-    "prepublishOnly": "npm run build"
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "check": "npm run build && npm run typecheck && npm test",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run check"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
-    "typebox": "*"
+    "@earendil-works/pi-ai": ">=0.84.4",
+    "@earendil-works/pi-coding-agent": ">=0.84.4",
+    "typebox": ">=1.0.0"
   },
-  "dependencies": {
-    "@cognee/cognee-ts": "^0.1.3"
-  },
+  "dependencies": { "zod": "4.0.17" },
   "devDependencies": {
-    "typescript": "^5.5.0"
+    "@earendil-works/pi-ai": "0.84.4",
+    "@earendil-works/pi-coding-agent": "0.84.4",
+    "@types/node": "24.3.0",
+    "typebox": "1.0.0",
+    "typescript": "5.9.2",
+    "vitest": "3.2.4"
   }
 }
