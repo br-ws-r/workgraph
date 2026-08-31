@@ -236,13 +236,16 @@ last-used fallback dataset.
 Credentials are accepted only from the process environment:
 
 ```text
-COGNEE_SERVICE_URL=https://api.cognee.ai
+COGNEE_SERVICE_URL=https://your-tenant.aws.cognee.ai
 COGNEE_API_KEY=<secret>
+COGNEE_TENANT_ID=<tenant-id>
 COGNEE_AUTH_SCHEME=x-api-key
 WORKGRAPH_DATA_DIR=/srv/data/cognee/outbox
 ```
 
-For an authenticated self-hosted service, use its loopback URL and set
+Cognee Cloud requires the tenant-specific API base URL and sends both
+`X-Api-Key` and `X-Tenant-Id` on every API request. For an authenticated
+self-hosted service, use its loopback URL, omit `COGNEE_TENANT_ID`, and set
 `COGNEE_AUTH_SCHEME=bearer` when the credential is a bearer token. Do not put
 credentials in Pi JSON, the repository, or the outbox.
 

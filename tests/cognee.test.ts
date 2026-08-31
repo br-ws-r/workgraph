@@ -12,6 +12,7 @@ describe("Cognee remote transport", () => {
     const client = new CogneeApiClient({
       serviceUrl: "https://tenant.example.test/cognee/",
       apiKey: "test-key",
+      tenantId: "test-tenant",
       fetch: fetch as typeof globalThis.fetch,
     });
     await client.recall("What changed?", dataset, 7);
@@ -21,6 +22,7 @@ describe("Cognee remote transport", () => {
       query: "What changed?", datasets: [dataset], search_type: "GRAPH_COMPLETION", top_k: 7,
     });
     expect(new Headers(init.headers).get("X-Api-Key")).toBe("test-key");
+    expect(new Headers(init.headers).get("X-Tenant-Id")).toBe("test-tenant");
   });
 
   it("sends structured records through remote remember", async () => {
@@ -41,6 +43,7 @@ describe("Cognee remote transport", () => {
     const [url, init] = fetch.mock.calls[0] as unknown as [URL, RequestInit];
     expect(url.toString()).toBe("http://127.0.0.1:8000/api/v1/remember");
     expect(new Headers(init.headers).get("Authorization")).toBe("Bearer local-token");
+    expect(new Headers(init.headers).has("X-Tenant-Id")).toBe(false);
     expect(new Headers(init.headers).get("Idempotency-Key")).toBe("payload-hash");
     expect((init.body as FormData).get("datasetName")).toBe(dataset);
   });

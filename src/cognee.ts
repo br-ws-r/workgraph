@@ -5,6 +5,7 @@ export type CogneeAuthScheme = "x-api-key" | "bearer";
 export interface CogneeClientOptions {
   serviceUrl: string;
   apiKey: string;
+  tenantId?: string;
   authScheme?: CogneeAuthScheme;
   timeoutMs?: number;
   fetch?: typeof globalThis.fetch;
@@ -13,6 +14,7 @@ export interface CogneeClientOptions {
 export class CogneeApiClient {
   readonly #baseUrl: URL;
   readonly #apiKey: string;
+  readonly #tenantId?: string;
   readonly #authScheme: CogneeAuthScheme;
   readonly #timeoutMs: number;
   readonly #fetch: typeof globalThis.fetch;
@@ -20,6 +22,7 @@ export class CogneeApiClient {
   constructor(options: CogneeClientOptions) {
     this.#baseUrl = new URL(options.serviceUrl.endsWith("/") ? options.serviceUrl : `${options.serviceUrl}/`);
     this.#apiKey = options.apiKey;
+    this.#tenantId = options.tenantId;
     this.#authScheme = options.authScheme ?? "x-api-key";
     this.#timeoutMs = Math.max(100, options.timeoutMs ?? 3000);
     this.#fetch = options.fetch ?? globalThis.fetch;
@@ -57,6 +60,7 @@ export class CogneeApiClient {
     const headers = new Headers(init.headers);
     if (this.#authScheme === "bearer") headers.set("Authorization", `Bearer ${this.#apiKey}`);
     else headers.set("X-Api-Key", this.#apiKey);
+    if (this.#tenantId) headers.set("X-Tenant-Id", this.#tenantId);
     const response = await this.#fetch(new URL(path, this.#baseUrl), { ...init, headers, signal });
     if (!response.ok) throw new Error(`Cognee API ${response.status}: ${await response.text()}`.slice(0, 1200));
     const contentType = response.headers.get("content-type") ?? "";
@@ -70,5 +74,6 @@ export function createCogneeClientFromEnv(env: NodeJS.ProcessEnv = process.env):
   if (!serviceUrl || !apiKey) return undefined;
   const authScheme = env.COGNEE_AUTH_SCHEME === "bearer" ? "bearer" : "x-api-key";
   const timeoutMs = Number(env.WORKGRAPH_COGNEE_TIMEOUT_MS ?? "3000");
-  return new CogneeApiClient({ serviceUrl, apiKey, authScheme, timeoutMs });
+  const tenantId = env.COGNEE_TENANT_ID?.trim() || undefined;
+  return new CogneeApiClient({ serviceUrl, apiKey, tenantId, authScheme, timeoutMs });
 }
