@@ -23,8 +23,23 @@ describe("Workgraph runtime", () => {
     const outbox = new WorkgraphOutbox(join(mkdtempSync(join(tmpdir(), "workgraph-")), "outbox.db"));
     const runtime = new WorkgraphRuntime({ outbox, env: {}, multica: new MulticaReader({ run: vi.fn() }) });
     runtime.lockInitiative({ issue: { id: initiative }, root: { id: initiative }, chain: [initiative] });
-    expect(runtime.scope?.dataset).toBe(`brwsr-initiative-${initiative}`);
+    expect(runtime.scope?.dataset).toBe(`workgraph-initiative-${initiative}`);
+    const remembered = runtime.remember({
+      entityType: "Decision", entityId: "decision:stable", authority: "confirmed",
+      summary: "Keep one stable identity.", source: "test://source",
+    });
+    expect(remembered.memoryRecord?.entity_id).toBe("decision:stable");
     expect(() => runtime.lockInitiative({ issue: { id: initiative }, root: { id: initiative }, chain: [initiative] })).toThrow("immutable");
     outbox.close();
+  });
+
+  it("uses the user data directory by default", () => {
+    const dataHome = mkdtempSync(join(tmpdir(), "workgraph-data-"));
+    const runtime = new WorkgraphRuntime({
+      env: { XDG_DATA_HOME: dataHome },
+      multica: new MulticaReader({ run: vi.fn() }),
+    });
+    expect(runtime.outbox.path).toBe(join(dataHome, "workgraph", "workgraph.db"));
+    runtime.outbox.close();
   });
 });

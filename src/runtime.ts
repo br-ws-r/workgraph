@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { CogneeApiClient, createCogneeClientFromEnv } from "./cognee.js";
 import { MulticaReader, type InitiativeResolution } from "./multica.js";
@@ -36,8 +37,9 @@ export class WorkgraphRuntime {
 
   constructor(options: WorkgraphRuntimeOptions = {}) {
     this.env = options.env ?? process.env;
-    const dataDir = this.env.WORKGRAPH_DATA_DIR?.trim() || "/srv/data/cognee/outbox";
-    this.outbox = options.outbox ?? new WorkgraphOutbox(join(dataDir, "brwsr.db"));
+    const userDataDir = this.env.XDG_DATA_HOME?.trim() || join(homedir(), ".local", "share");
+    const dataDir = this.env.WORKGRAPH_DATA_DIR?.trim() || join(userDataDir, "workgraph");
+    this.outbox = options.outbox ?? new WorkgraphOutbox(join(dataDir, "workgraph.db"));
     this.cognee = options.cognee ?? createCogneeClientFromEnv(this.env);
     this.multica = options.multica ?? new MulticaReader({ binary: this.env.MULTICA_BIN?.trim() || "multica" });
   }

@@ -1,276 +1,334 @@
 # Workgraph
 
-Workgraph is an opinionated initiative-scoped knowledge graph and durable agent
-memory. It deliberately assumes **Pi** as the agent runtime, **Multica** as the
-authoritative workflow system, and **Cognee** as the semantic memory backend.
-It is not a generic personal-memory package.
+Initiative-scoped knowledge graph and durable memory for
+[Multica](https://github.com/multica-ai/multica) agents running
+[Pi](https://github.com/earendil-works/pi), backed by
+[Cognee](https://github.com/topoteretes/cognee).
 
-Multica owns initiatives, issues, tasks, assignment, workflow state, runs, and
-handoffs. GitHub owns pull-request and delivery state. Workgraph stores bounded
-context, provenance, relationships, and a chronological delivery outbox; it
-must never override fresh Multica or GitHub state.
+> **Status: experimental.** Workgraph is ready for evaluation, but its public
+> configuration and data format may still change before `1.0`.
+
+Multica already knows which issues, tasks, agents, and runs belong to a piece of
+work. Cognee can turn bounded records into searchable semantic memory. Workgraph
+connects the two: it resolves a Pi run to the root Multica issue, gives that
+initiative one isolated Cognee dataset, and keeps an exact local delivery
+timeline in SQLite.
+
+Use Workgraph when several Pi runs, repositories, or Multica projects contribute
+to one initiative and should share context without sharing all agent memory.
+Workgraph is not a generic personal-memory plugin.
+
+## What it does
+
+- Resolves the current task or issue through Multica's persisted parent chain.
+- Maps the root issue UUID to `workgraph-initiative-<root-uuid>` in Cognee.
+- Locks that dataset for the lifetime of the Pi process.
+- Recalls bounded semantic context before each agent turn.
+- Records sourced decisions, blockers, artifacts, evidence, and run summaries.
+- Keeps writes in a durable SQLite outbox when Cognee is unavailable.
+- Exposes an exact initiative timeline separately from Cognee's
+  non-deterministic graph extraction.
+
+Workgraph does **not** replace Multica workflow state, assignment, or handoffs.
+It does not synchronize GitHub state, archive transcripts, capture arbitrary
+tool output, or expose global search and destructive memory tools.
+
+## How scope works
+
+```text
+Multica task
+  -> issue
+  -> parent issue (possibly in another project)
+  -> root issue UUID
+  -> Cognee dataset: workgraph-initiative-<root-uuid>
+```
+
+The Multica workspace is the security boundary. Projects and repositories are
+record properties, not memory namespaces. A process that cannot verify one root
+enters `No initiative` mode: Pi remains usable, but recall, timeline access, and
+writes are disabled.
 
 ## Prerequisites
 
-Workgraph is intentionally not a drop-in memory plugin. A supported deployment
-requires all of the following:
+- Node.js 22 or newer. CI currently tests Node.js 24.
+- A compatible Pi installation. This package currently targets
+  `@earendil-works/pi-coding-agent` `>=0.84.4`.
+- An authenticated Multica CLI. The resolver is verified against Multica
+  `v0.4.35`; test another version before production use.
+- Cognee Cloud, or a reachable self-hosted Cognee HTTP API.
 
-- Node.js 22 or newer. The durable outbox uses the built-in `node:sqlite`
-  module; no embedded Cognee database or native SQLite add-on is installed.
-- Pi with the `session_start`, `before_agent_start`, `agent_settled`,
-  `session_before_compact`, and `session_shutdown` extension events.
-- An authenticated Multica CLI. Compatibility is verified against `v0.4.35`;
-  another version must pass the resolver and cross-project integration tests
-  before deployment. Managed runs must provide
-  `MULTICA_WORKSPACE_ID`, `MULTICA_TASK_ID`, `MULTICA_RUN_ID`, and
-  `MULTICA_AGENT_ID`.
-- A central Cognee API reachable through `COGNEE_SERVICE_URL`, with a dedicated
-  API credential. It can be Cognee Cloud for a non-sensitive evaluation or a
-  loopback-only self-hosted service.
-- A writable, persistent `WORKGRAPH_DATA_DIR`. Production deployments should
-  place it under `/srv/data`; ephemeral process or repository directories are
-  not supported as durable memory.
-- One new Pi process per Multica run. Initiative scope is immutable for the
-  lifetime of the process and is never switched in-place.
+For a first evaluation, use Cognee Cloud and interactive Pi. A managed Multica
+run can be connected after the interactive path works.
 
-Pi and the Multica CLI remain usable when Cognee is unavailable. Multica must
-be reachable only while selecting or refreshing authoritative initiative
-state; a failure disables memory for that operation rather than disabling Pi.
+## Quick start with Cognee Cloud
 
-## Assumptions and boundaries
+### 1. Prepare Multica and Pi
 
-- A Multica issue UUID is stable and globally identifies the issue.
-- `parent_issue_id` is the canonical initiative hierarchy. Workgraph never
-  reconstructs hierarchy from project, repository, branch, CWD, issue title,
-  prompt text, semantic similarity, or a previously selected dataset.
-- Every parent in a chain belongs to the same Multica workspace. Cross-project
-  links inside that workspace are supported; cross-workspace parent links are
-  not.
-- The maximum accepted parent depth is 32 and cycles fail closed.
-- Project and repository identity are record properties. Neither creates a
-  memory namespace.
-- Cognee extraction is useful but not deterministic across model or backend
-  versions. SQLite is therefore the exact delivery and chronology source.
-- Workgraph does not provide workflow, task routing, assignment, approval,
-  locking, or PR state. Those remain native Multica and GitHub concerns.
+Install and authenticate the Multica CLI using its
+[official setup guide](https://github.com/multica-ai/multica/blob/main/CLI_INSTALL.md),
+and install the compatible Pi distribution if needed:
 
-## Verified Multica cross-project hierarchy
-
-Cross-project root resolution is supported by the pinned Multica `v0.4.35`
-model. Multica validates `parent_issue_id` and `project_id` independently
-against the same workspace. When a child omits `project_id`, it inherits the
-parent project; when it supplies an explicit project, that project overrides
-the parent project without removing the parent link.
-
-This is covered upstream by
-[`TestCreateSubIssueUsesExplicitProjectOverParentProject`](https://github.com/multica-ai/multica/blob/v0.4.35/server/internal/handler/handler_test.go)
-and by the independent parent/project validation in the
-[`IssueService`](https://github.com/multica-ai/multica/blob/v0.4.35/server/internal/service/issue.go).
-Multica's
-[`issue-detail.tsx`](https://github.com/multica-ai/multica/blob/v0.4.35/packages/views/issues/components/issue-detail.tsx)
-also documents `project_id` and `parent_issue_id` as orthogonal. The CLI accepts
-both `--parent <issue>` and `--project <project>` on issue creation and update.
-
-Workgraph consequently follows this persisted chain without consulting project
-identity:
-
-```text
-task in project storefront
-  -> child issue (project storefront)
-  -> parent issue (project billing)
-  -> root issue UUID
-  -> brwsr-initiative-<root-uuid>
+```bash
+npm install --global @earendil-works/pi-coding-agent@0.84.4
 ```
 
-The boundary is the workspace, not the project. Multica rejects a parent or
-project outside the selected workspace, and Workgraph passes the same
-`MULTICA_WORKSPACE_ID` on every read. An explicit `initiative_id` metadata
-fallback is therefore not required for cross-project initiatives on Multica
-`v0.4.35`.
+Then confirm that both commands are available:
 
-## Core contract
+```bash
+multica version
+multica auth status
+pi --version
+```
 
-- One root Multica issue UUID maps to exactly one Cognee dataset:
-  `brwsr-initiative-<uuid>`.
-- A Pi process locks one verified initiative at `session_start`. It cannot
-  switch datasets later.
-- Managed runs resolve `MULTICA_TASK_ID` through Multica's read-only task and
-  persisted parent chain. Interactive Pi can use `--initiative <root-uuid>` or
-  choose a recent root issue.
-- Unavailable or ambiguous Multica state becomes `No initiative`: Pi continues,
-  while all recall and writes remain disabled.
-- Cognee failures never block Pi. Pending writes remain in the SQLite outbox.
-- No delete, global recall, arbitrary dataset, transcript, or unrestricted tool
-  capture operation is exposed.
+Select the workspace containing the initiative you want to use. Workgraph can
+follow parent links across projects, but every issue in the chain must belong to
+the same workspace. `multica workspace list` shows the available workspaces and
+`multica workspace switch <id-or-slug>` selects one.
 
-## Authority model
+### 2. Clone and install Workgraph
 
-Workgraph has no authority to mutate or reinterpret operational state:
+Workgraph is not published to npm yet, so install it from a local clone:
 
-| Information | Authority | Workgraph treatment |
+```bash
+git clone https://github.com/br-ws-r/workgraph.git
+cd workgraph
+npm ci
+npm run check
+pi install "$PWD"
+```
+
+Restart Pi after installation if it was already running.
+
+### 3. Configure Cognee Cloud
+
+In the Cognee Cloud dashboard, create an API key and copy the **API Base URL**
+and **Tenant ID** shown under Connection Details. Export them in the environment
+that launches Pi:
+
+```bash
+export COGNEE_SERVICE_URL="https://your-tenant.aws.cognee.ai"
+export COGNEE_API_KEY="your-api-key"
+export COGNEE_TENANT_ID="your-tenant-id"
+export COGNEE_AUTH_SCHEME="x-api-key"
+```
+
+Keep the key in your shell's secret manager or runtime environment; do not put
+it in Pi configuration, this repository, prompts, or the SQLite outbox.
+
+You can check the connection independently before starting Pi:
+
+```bash
+curl --fail --silent --show-error \
+  -H "X-Api-Key: $COGNEE_API_KEY" \
+  -H "X-Tenant-Id: $COGNEE_TENANT_ID" \
+  "$COGNEE_SERVICE_URL/health"
+```
+
+Cognee documents these values in its
+[Cloud API-key guide](https://docs.cognee.ai/cognee-cloud/ui/api-keys).
+
+### 4. Start an interactive initiative
+
+Run Pi with the UUID of a **root** Multica issue:
+
+```bash
+pi --initiative 00000000-0000-4000-8000-000000000001
+```
+
+If you omit `--initiative` in an interactive terminal, Workgraph offers recent
+active root issues from the selected Multica workspace. A child issue is
+rejected because it could make dataset selection ambiguous to a human operator.
+
+Ask Pi to call `initiative_memory_status`. A working setup reports:
+
+- `mode: "initiative"`;
+- the expected root UUID and `workgraph-initiative-...` dataset;
+- `cogneeConfigured: true`.
+
+You can then ask Pi to remember a sourced decision and recall it later. Cognee
+ingestion runs in the background and can take time. `initiative_timeline` shows
+the exact local event and whether Cognee accepted it for processing; acceptance
+does not mean graph extraction has already completed.
+
+## Managed Multica runs
+
+When Multica launches Pi for a task, Workgraph resolves the assigned task rather
+than asking a person to select an initiative. The process environment must
+contain:
+
+```text
+MULTICA_WORKSPACE_ID=<workspace-uuid>
+MULTICA_TASK_ID=<task-uuid>
+MULTICA_RUN_ID=<run-uuid>
+MULTICA_AGENT_ID=<agent-uuid>
+```
+
+Workgraph runs `multica agent tasks <agent-id>` to find the exact task, reads its
+issue, and follows `parent_issue_id` to the root. Start one new Pi process per
+Multica run; initiative scope is intentionally immutable in-process.
+
+`MULTICA_ISSUE_ID` is also supported for an explicitly issue-scoped launch.
+`MULTICA_BIN` can point to a non-default Multica CLI binary.
+
+## Self-hosted Cognee
+
+Follow Cognee's
+[REST API deployment guide](https://docs.cognee.ai/guides/deploy-rest-api-server)
+to configure its database, graph, embedding, and LLM providers. Workgraph only
+calls the HTTP API; inference and storage are Cognee concerns.
+
+### Local evaluation without Cognee authentication
+
+Only use this mode on loopback or another trusted development boundary:
+
+```bash
+export COGNEE_SERVICE_URL="http://127.0.0.1:8000"
+export COGNEE_AUTH_SCHEME="none"
+unset COGNEE_API_KEY COGNEE_TENANT_ID
+```
+
+### Authenticated self-hosted Cognee
+
+Set `REQUIRE_AUTHENTICATION=true` in Cognee, register a user, and obtain a token
+from `POST /api/v1/auth/login` as described in the deployment guide. Then launch
+Pi with:
+
+```bash
+export COGNEE_SERVICE_URL="https://cognee.example.com"
+export COGNEE_API_KEY="your-bearer-token"
+export COGNEE_AUTH_SCHEME="bearer"
+unset COGNEE_TENANT_ID
+```
+
+For production, keep Cognee on a private network or behind a reviewed HTTPS
+boundary. Self-hosted storage does not necessarily mean local inference: records
+leave the host when Cognee uses an external LLM or embedding provider.
+
+## Local data
+
+The exact event timeline and pending delivery payloads are stored by default at:
+
+```text
+$XDG_DATA_HOME/workgraph/workgraph.db
+```
+
+When `XDG_DATA_HOME` is unset, the default is
+`~/.local/share/workgraph/workgraph.db`. For a server or container, point
+`WORKGRAPH_DATA_DIR` at a persistent writable volume, for example:
+
+```bash
+export WORKGRAPH_DATA_DIR="/srv/data/workgraph"
+```
+
+Do not use an ephemeral checkout or temporary directory if pending writes must
+survive restarts.
+
+### Upgrading an earlier pre-release checkout
+
+Earlier Workgraph commits used `brwsr-initiative-...` datasets and a `brwsr.db`
+file. This release deliberately replaces those internal names. There is no
+automatic migration: stop all Workgraph processes and either begin with fresh
+evaluation data or migrate the SQLite file and already delivered Cognee datasets
+before relying on the new names.
+
+## Pi tools
+
+| Tool | Purpose |
+| --- | --- |
+| `initiative_memory_status` | Show scope, backend, and pending writes |
+| `initiative_memory_recall` | Search only the locked initiative dataset |
+| `initiative_memory_remember` | Append one bounded, sourced memory record |
+| `initiative_timeline` | Read the exact ordered SQLite event timeline |
+
+`initiative_memory_remember` accepts an optional stable `entity_id`. Supply one
+when later records should refer to the same decision, blocker, or artifact;
+otherwise Workgraph creates a unique ID. None of the tools accepts a dataset
+argument.
+
+## Runtime configuration reference
+
+| Variable | Required | Meaning |
 | --- | --- | --- |
-| Initiative hierarchy, issue/task state, assignee, run, handoff | Multica | Fresh read-back always wins |
-| Repository revision, pull request, checks, delivery evidence | GitHub and repository | Fresh read-back always wins |
-| Exact event order and Cognee delivery status | Workgraph SQLite outbox | Read through `initiative_timeline` |
-| Semantic context and extracted relationships | Cognee | Non-authoritative recall lead |
+| `COGNEE_SERVICE_URL` | For Cognee | API base URL without `/api/v1` |
+| `COGNEE_AUTH_SCHEME` | No | `x-api-key` (default), `bearer`, or `none` |
+| `COGNEE_API_KEY` | Except `none` | Cloud API key or self-hosted bearer token |
+| `COGNEE_TENANT_ID` | Cognee Cloud | Tenant ID sent as `X-Tenant-Id` |
+| `WORKGRAPH_COGNEE_TIMEOUT_MS` | No | HTTP timeout; default `3000` |
+| `WORKGRAPH_DATA_DIR` | No | Persistent SQLite directory |
+| `MULTICA_WORKSPACE_ID` | Managed run | Workspace used for every Multica read |
+| `MULTICA_TASK_ID` | Managed run | Exact assigned task |
+| `MULTICA_RUN_ID` | Managed run | Current run identity |
+| `MULTICA_AGENT_ID` | Managed run | Agent used for task lookup |
+| `MULTICA_ISSUE_ID` | Alternative | Explicit issue when no task is supplied |
+| `MULTICA_BIN` | No | Multica executable; default `multica` |
 
-`confirmed` in a memory record means that its source was confirmed when
-observed. It does not make a stale record stronger than a later Multica or
-GitHub read-back.
+Credentials are read only from the process environment.
 
-## Initiative and dataset identity
+## Authority and failure behavior
 
-The root Multica issue UUID is the only dataset key:
+| Information | Authority | Workgraph behavior |
+| --- | --- | --- |
+| Issues, tasks, assignments, runs | Multica | Re-read; current state wins |
+| PR, checks, delivery state | GitHub/repository | Agent verifies directly |
+| Event order and delivery | Workgraph SQLite | Use the timeline tool |
+| Semantic context | Cognee | Non-authoritative recall lead |
 
-```text
-initiative_id = canonical root issue UUID
-dataset       = brwsr-initiative-<initiative_id>
-```
+Cognee failure never blocks Pi. A failed write remains pending in SQLite and is
+retried during later writes or shutdown. If Multica becomes unavailable for an
+operation, Workgraph omits memory for that operation. If Multica reports a
+different root after scope was locked, the operation fails closed and the
+process never switches datasets.
 
-All agents, repositories, projects, tasks, sessions, and runs belonging to the
-same initiative share that dataset. They remain distinguishable through record
-properties such as `agent_id`, `task_id`, `run_id`, repository, and source.
-Workgraph never exposes a dataset argument to Pi tools.
-
-Managed Pi resolves exactly one task from `multica agent tasks <agent-id>`,
-loads its issue, and follows persisted parents to the root. Interactive Pi
-accepts a verified root through `--initiative <uuid>` or offers recent active
-roots from Multica. Passing a child to `--initiative` is rejected.
-
-## Ontology
-
-The canonical backend-neutral ontology lives in
-[`docs/initiative-memory-ontology.md`](docs/initiative-memory-ontology.md) and
-the executable validators in [`src/schema.ts`](src/schema.ts). It is owned by
-Workgraph, not inferred back from Cognee.
-
-Entity types are `Issue`, `Task`, `Agent`, `Squad`, `Handoff`, `Decision`,
-`Blocker`, `Artifact`, `Repository`, `Run`, `Evidence`, and `Conflict`.
-Relations include hierarchy, ownership, delegation, dependencies, production,
-evidence, implementation, and observation. Every permanent record includes a
-stable entity ID, root initiative ID, bounded summary, source, observation
-timestamp, authority, and typed relations.
-
-Authority levels are:
-
-- `observed`: bounded direct read-back;
-- `confirmed`: explicitly verified evidence or settled decision;
-- `proposed`: proposal not yet reflected in authoritative state; and
-- `inferred`: semantic or model-derived interpretation.
-
-The first release uses Cognee's default graph extraction over these structured
-records. It does not install a custom Cognee graph model. A custom model is
-appropriate only after evaluation demonstrates inconsistent mapping, and its
-definition must be versioned in this repository.
-
-## Pi lifecycle
-
-| Event | Workgraph behavior |
-| --- | --- |
-| `session_start` | Connect the API client, resolve and verify one root, lock the dataset, report status |
-| `before_agent_start` | Refresh Multica, recall only the locked dataset, inject bounded separated context |
-| `agent_settled` | Refresh Multica, append a bounded run summary, attempt idempotent delivery |
-| `session_before_compact` | Append a bounded decision/blocker/change/next-step anchor without blocking compaction |
-| `session_shutdown` | Time-bound pending delivery flush and close SQLite |
-
-General `tool_execution_end` capture is intentionally absent. Shell output,
-arbitrary tool traces, whole files, and full diffs are not memory inputs.
-
-## Manual tools
-
-- `initiative_memory_status`: show the immutable initiative, dataset, backend,
-  and outbox state without changing them.
-- `initiative_memory_recall`: semantic search only inside the locked dataset.
-- `initiative_memory_remember`: store one bounded sourced record in the locked
-  initiative.
-- `initiative_timeline`: read exact ordered events and delivery state directly
-  from SQLite.
-
-The tools expose no delete, forget, dataset-selection, global search, raw
-query, or graph-administration operation. Write behavior is unavailable under
-`No initiative`.
-
-## Durable outbox and timeline
-
-SQLite is both an append-only audit and a delivery outbox. Each event records
-its stable event ID, timestamp, workspace, initiative, task, run, agent, type,
-bounded summary, source, source revision, authority, and payload hash. A unique
-event ID makes retries idempotent, while WAL mode and a busy timeout allow
-multiple Pi processes to append safely.
-
-Failed Cognee deliveries retain their payload, attempt count, and bounded
-error. Restarting Pi or Cognee does not discard them. The outbox can reingest
-bounded records during Cloud-to-self-hosted migration, but it cannot guarantee
-a bit-identical extracted Cognee graph.
-
-## Failure behavior and fallbacks
-
-| Failure | Result |
-| --- | --- |
-| Missing task/agent identity | Interactive selection, otherwise `No initiative` |
-| Invalid, ambiguous, cyclic, or inaccessible parent chain | `No initiative`; Pi continues |
-| Cancelled interactive selection | `No initiative`; no last-dataset reuse |
-| Cognee timeout/outage | Recall omitted; Pi continues; pending writes stay in SQLite |
-| Multica refresh contradicts locked root | Memory operation fails closed; process never switches datasets |
-| Stale Cognee claim | Fresh Multica/GitHub state wins |
-
-There is no shared, workspace, agent, project, repository, ad-hoc, or
-last-used fallback dataset.
+SQLite event payloads are append-only. Delivery attempt counters, delivery
+timestamps, and bounded errors are mutable metadata on those events. Workgraph
+sends a payload hash in the `Idempotency-Key` header, but Cognee does not
+currently document server-side support for that header. Delivery is therefore
+at least once after an ambiguous timeout and duplicate extraction is possible.
 
 ## Security and privacy
 
-- Credentials are environment-only and must never enter Pi configuration,
-  repository files, summaries, SQLite, or logs.
-- Permanent records must not contain secrets, authentication state, personal
-  data, raw transcripts, raw tool output, shell logs, whole files, or full
-  diffs.
-- Self-hosted storage does not imply local inference. When Cognee uses an
-  external LLM or embedding provider, bounded records leave the host during
-  inference and require an explicit privacy decision.
-- Production APIs should bind to loopback, require authentication, and be
-  accessed through an SSH tunnel or another reviewed private boundary.
-- Workgraph deliberately exposes no destructive memory operation.
+Permanent records should contain only bounded information needed by future runs
+and a source that lets an agent verify it. Do not store credentials, personal
+data, raw transcripts, shell logs, complete files, full diffs, or unrestricted
+tool output.
 
-## Runtime configuration
+These content rules are an operating policy, **not automatic secret or PII
+redaction**. Workgraph validates record types and size but cannot determine
+whether a summary contains sensitive material. Operators and agents remain
+responsible for what they submit to `initiative_memory_remember`.
 
-Credentials are accepted only from the process environment:
+Workgraph exposes no delete, forget, arbitrary-dataset, global-search, raw-query,
+or graph-administration operation.
 
-```text
-COGNEE_SERVICE_URL=https://your-tenant.aws.cognee.ai
-COGNEE_API_KEY=<secret>
-COGNEE_TENANT_ID=<tenant-id>
-COGNEE_AUTH_SCHEME=x-api-key
-WORKGRAPH_DATA_DIR=/srv/data/cognee/outbox
-```
+## Ontology and lifecycle
 
-Cognee Cloud requires the tenant-specific API base URL and sends both
-`X-Api-Key` and `X-Tenant-Id` on every API request. For an authenticated
-self-hosted service, use its loopback URL, omit `COGNEE_TENANT_ID`, and set
-`COGNEE_AUTH_SCHEME=bearer` when the credential is a bearer token. Do not put
-credentials in Pi JSON, the repository, or the outbox.
+The backend-neutral record vocabulary is documented in
+[`docs/initiative-memory-ontology.md`](docs/initiative-memory-ontology.md) and
+validated by [`src/schema.ts`](src/schema.ts). Cognee applies its default graph
+extraction; Workgraph does not install a custom graph model.
 
-Install as a Pi package after building:
+| Pi event | Workgraph behavior |
+| --- | --- |
+| `session_start` | Resolve and lock one verified initiative |
+| `before_agent_start` | Refresh, recall, and inject separated context |
+| `agent_settled` | Record the run/issue state and schedule delivery |
+| `session_before_compact` | Record a run/status anchor |
+| `session_shutdown` | Flush pending delivery and close SQLite |
 
-```bash
-npm ci
-npm run check
-pi install /absolute/path/to/workgraph
-```
+General `tool_execution_end` capture is deliberately absent.
 
-Workgraph registers `initiative_memory_status`, `initiative_memory_recall`,
-`initiative_memory_remember`, and `initiative_timeline`. None accepts a dataset
-parameter.
+## Multica hierarchy assumptions
 
-## Cognee client decision
+Workgraph treats `parent_issue_id` as canonical and never reconstructs hierarchy
+from project, repository, branch, working directory, title, prompt text,
+similarity, or a previously selected dataset. Parent traversal has a maximum
+depth of 32 and rejects cycles.
 
-The public `@cognee/cognee-ts` releases are embedded Rust/Neon bindings. They
-do not export the documented `serve({ url, apiKey })`; upstream places that
-remote bridge in a closed cloud package. Workgraph therefore uses Cognee's
-official `/api/v1` HTTP API through a small typed transport. It implements no
-retrieval, embeddings, graph extraction, or ontology engine. Endpoint-routing
-tests prove every semantic operation uses `COGNEE_SERVICE_URL` and the locked
-dataset. A future public remote SDK can replace this transport without changing
-the Workgraph runtime contract.
+Cross-project traversal is verified against Multica `v0.4.35`, whose
+[`IssueService`](https://github.com/multica-ai/multica/blob/v0.4.35/server/internal/service/issue.go)
+validates project and parent independently within one workspace. The behavior is
+also covered by Multica's
+[`TestCreateSubIssueUsesExplicitProjectOverParentProject`](https://github.com/multica-ai/multica/blob/v0.4.35/server/internal/handler/handler_test.go).
 
 ## Development
 
@@ -279,20 +337,14 @@ npm ci
 npm run check
 ```
 
-The test suite covers dataset derivation, parent-chain and exact-task
-resolution, cross-project traversal, root immutability, no-initiative behavior,
-outbox ordering/idempotency, endpoint routing, and outage-safe delivery.
+The tests cover dataset derivation, exact task and parent-chain resolution,
+cross-project traversal, scope immutability, `No initiative`, outbox ordering and
+idempotency, Cognee endpoint routing and authentication, and outage-safe
+delivery.
 
-## Non-goals
+## Provenance and license
 
-Workgraph does not implement embeddings, retrieval algorithms, semantic graph
-extraction, a general ontology engine, Multica workflow, GitHub synchronization,
-transcript archiving, personal memory, or deterministic replay of a Cognee
-graph. It also does not attempt to make Pi, Multica, or Cognee optional in its
-first supported architecture.
-
-## Provenance
-
-This repository is a fork of `@kerryhatcher/pi-cognee` and retains its MIT
-license. Workgraph replaces the upstream generic SDK/MCP and destructive tool
-surface with the initiative-scoped architecture described above.
+Workgraph is a fork of
+[`@kerryhatcher/pi-cognee`](https://github.com/kerryhatcher/pi-cognee). It
+retains the upstream MIT license while replacing the generic SDK/MCP and
+destructive tool surface with the initiative-scoped architecture above.

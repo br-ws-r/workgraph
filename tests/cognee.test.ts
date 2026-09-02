@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { CogneeApiClient } from "../src/cognee.js";
+import { CogneeApiClient, createCogneeClientFromEnv } from "../src/cognee.js";
 
 const initiative = "00000000-0000-4000-8000-000000000001";
-const dataset = `brwsr-initiative-${initiative}`;
+const dataset = `workgraph-initiative-${initiative}`;
 
 describe("Cognee remote transport", () => {
   it("routes recall only to the configured endpoint and locked dataset", async () => {
@@ -46,5 +46,26 @@ describe("Cognee remote transport", () => {
     expect(new Headers(init.headers).has("X-Tenant-Id")).toBe(false);
     expect(new Headers(init.headers).get("Idempotency-Key")).toBe("payload-hash");
     expect((init.body as FormData).get("datasetName")).toBe(dataset);
+    expect((init.body as FormData).get("run_in_background")).toBe("true");
+  });
+
+  it("supports unauthenticated loopback self-hosting", async () => {
+    const fetch = vi.fn(async () => new Response("ok", { status: 200 }));
+    const client = new CogneeApiClient({
+      serviceUrl: "http://127.0.0.1:8000",
+      authScheme: "none",
+      fetch: fetch as typeof globalThis.fetch,
+    });
+
+    await client.health();
+
+    const [, init] = fetch.mock.calls[0] as unknown as [URL, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.has("Authorization")).toBe(false);
+    expect(headers.has("X-Api-Key")).toBe(false);
+    expect(createCogneeClientFromEnv({
+      COGNEE_SERVICE_URL: "http://127.0.0.1:8000",
+      COGNEE_AUTH_SCHEME: "none",
+    })).toBeInstanceOf(CogneeApiClient);
   });
 });

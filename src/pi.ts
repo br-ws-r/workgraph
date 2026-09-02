@@ -127,10 +127,11 @@ function registerTools(pi: ExtensionAPI, runtime: WorkgraphRuntime): void {
   pi.registerTool({
     name: "initiative_memory_remember",
     label: "Remember Initiative Memory",
-    description: "Append one bounded, sourced record to the active initiative outbox for idempotent Cognee delivery.",
+    description: "Append one bounded, sourced record to the active initiative outbox for durable Cognee delivery.",
     parameters: Type.Object({
       entity_type: StringEnum(NODE_TYPES),
       authority: StringEnum(AUTHORITY_LEVELS),
+      entity_id: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
       summary: Type.String({ minLength: 1, maxLength: 4000 }),
       source: Type.String({ minLength: 1, maxLength: 1000 }),
       source_revision: Type.Optional(Type.String({ maxLength: 256 })),
@@ -142,6 +143,7 @@ function registerTools(pi: ExtensionAPI, runtime: WorkgraphRuntime): void {
     async execute(_id, params) {
       const event = runtime.remember({
         entityType: params.entity_type,
+        entityId: params.entity_id,
         authority: params.authority,
         summary: params.summary,
         source: params.source,

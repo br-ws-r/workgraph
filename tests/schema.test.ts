@@ -5,7 +5,7 @@ const initiative = "00000000-0000-4000-8000-000000000001";
 
 describe("initiative memory schema", () => {
   it("derives one stable dataset from the root issue UUID", () => {
-    expect(datasetForInitiative(initiative)).toBe(`brwsr-initiative-${initiative}`);
+    expect(datasetForInitiative(initiative)).toBe(`workgraph-initiative-${initiative}`);
   });
 
   it("requires provenance, timestamp, and authority", () => {

@@ -96,7 +96,7 @@ export function createEvent(input: WorkgraphEventInput): WorkgraphEvent {
 }
 
 export function datasetForInitiative(initiativeId: string): string {
-  return `brwsr-initiative-${z.string().uuid().parse(initiativeId).toLowerCase()}`;
+  return `workgraph-initiative-${z.string().uuid().parse(initiativeId).toLowerCase()}`;
 }
 
 export function boundText(value: string, maximum: number): string {
