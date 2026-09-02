@@ -159,8 +159,10 @@ contain:
 ```text
 MULTICA_WORKSPACE_ID=<workspace-uuid>
 MULTICA_TASK_ID=<task-uuid>
-MULTICA_RUN_ID=<run-uuid>
 MULTICA_AGENT_ID=<agent-uuid>
+# Optional when the runtime exposes a distinct run UUID; otherwise Workgraph
+# uses the exact MULTICA_TASK_ID as the run identity.
+MULTICA_RUN_ID=<run-uuid>
 ```
 
 Workgraph runs `multica agent tasks <agent-id>` to find the exact task, reads its
@@ -255,9 +257,10 @@ argument.
 | `COGNEE_TENANT_ID` | Cognee Cloud | Tenant ID sent as `X-Tenant-Id` |
 | `WORKGRAPH_COGNEE_TIMEOUT_MS` | No | HTTP timeout; default `3000` |
 | `WORKGRAPH_DATA_DIR` | No | Persistent SQLite directory |
+| `WORKGRAPH_DATASET_PREFIX` | No | Dataset prefix; default `workgraph-initiative` |
 | `MULTICA_WORKSPACE_ID` | Managed run | Workspace used for every Multica read |
-| `MULTICA_TASK_ID` | Managed run | Exact assigned task |
-| `MULTICA_RUN_ID` | Managed run | Current run identity |
+| `MULTICA_TASK_ID` | Managed run | Exact assigned agent task and fallback run identity |
+| `MULTICA_RUN_ID` | No | Optional distinct run identity; takes precedence over the task UUID |
 | `MULTICA_AGENT_ID` | Managed run | Agent used for task lookup |
 | `MULTICA_ISSUE_ID` | Alternative | Explicit issue when no task is supplied |
 | `MULTICA_BIN` | No | Multica executable; default `multica` |

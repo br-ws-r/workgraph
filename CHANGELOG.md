@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Preserve managed-run provenance on current Multica releases by using the
+  exact agent task UUID as the run identity when no separate run UUID is
+  exported, while still preferring `MULTICA_RUN_ID` when available.
+- Allow deployments to configure the initiative dataset prefix without
+  changing the default public `workgraph-initiative-` namespace.
+- Apply the SQLite busy timeout before concurrent Pi processes negotiate WAL
+  and initialize the shared outbox schema, preventing one role from losing its
+  Workgraph extension during simultaneous task starts.
 - Add a public quick start for Multica, Pi, Cognee Cloud, and self-hosted
   Cognee; support unauthenticated loopback Cognee for local evaluation.
 - Replace the pre-release internal `brwsr-` dataset and database names with
