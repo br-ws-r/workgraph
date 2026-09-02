@@ -51,7 +51,8 @@ output, shell logs, full diffs, and unrestricted file contents are forbidden.
 
 ## Timeline versus semantic graph
 
-SQLite is the exact append-only audit and delivery source. Cognee provides
+SQLite is the exact event audit and delivery source. Event payloads are
+append-only; delivery attempts and results are mutable metadata. Cognee provides
 semantic answers over the same bounded records. Chronology and delivery status
 must be read from `initiative_timeline`, never reconstructed through temporal
 LLM extraction. Reingestion can rebuild a useful graph, but graph extraction is
