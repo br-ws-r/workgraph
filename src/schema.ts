@@ -95,8 +95,12 @@ export function createEvent(input: WorkgraphEventInput): WorkgraphEvent {
   };
 }
 
-export function datasetForInitiative(initiativeId: string): string {
-  return `workgraph-initiative-${z.string().uuid().parse(initiativeId).toLowerCase()}`;
+export function datasetForInitiative(
+  initiativeId: string,
+  prefix = "workgraph-initiative",
+): string {
+  const validatedPrefix = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(128).parse(prefix);
+  return `${validatedPrefix}-${z.string().uuid().parse(initiativeId).toLowerCase()}`;
 }
 
 export function boundText(value: string, maximum: number): string {

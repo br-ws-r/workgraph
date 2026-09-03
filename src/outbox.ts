@@ -16,7 +16,11 @@ export class WorkgraphOutbox {
   constructor(readonly path: string) {
     mkdirSync(dirname(path), { recursive: true });
     this.#db = new DatabaseSync(path);
-    this.#db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;");
+    // Set the lock wait before negotiating WAL or creating the shared schema.
+    // Multiple Multica agents can start at the same time; without this order a
+    // loser can throw SQLITE_BUSY while the extension is still loading and
+    // silently miss Workgraph for its entire Pi process.
+    this.#db.exec("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;");
     this.#db.exec(`
       CREATE TABLE IF NOT EXISTS workgraph_events (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT,

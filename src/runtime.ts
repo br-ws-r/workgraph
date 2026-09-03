@@ -49,12 +49,20 @@ export class WorkgraphRuntime {
   lockInitiative(resolution: InitiativeResolution): WorkgraphScope {
     if (this.#scope) throw new Error("Workgraph initiative is immutable for the lifetime of this Pi process");
     const initiativeId = resolution.root.id.toLowerCase();
+    const taskId = this.env.MULTICA_TASK_ID?.trim() || resolution.taskId;
     this.#scope = Object.freeze({
       workspaceId: this.env.MULTICA_WORKSPACE_ID?.trim(),
       initiativeId,
-      dataset: datasetForInitiative(initiativeId),
-      taskId: this.env.MULTICA_TASK_ID?.trim() || resolution.taskId,
-      runId: this.env.MULTICA_RUN_ID?.trim(),
+      dataset: datasetForInitiative(
+        initiativeId,
+        this.env.WORKGRAPH_DATASET_PREFIX?.trim() || undefined,
+      ),
+      taskId,
+      // Multica currently identifies one managed execution as an agent task
+      // and exports that UUID as MULTICA_TASK_ID. Keep accepting a future
+      // dedicated run identity, but never discard the exact identity that the
+      // supported runtime already provides.
+      runId: this.env.MULTICA_RUN_ID?.trim() || taskId,
       agentId: this.env.MULTICA_AGENT_ID?.trim(),
       issueId: resolution.issue.id,
       rootTitle: resolution.root.title,

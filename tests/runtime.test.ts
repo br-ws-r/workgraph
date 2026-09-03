@@ -33,6 +33,35 @@ describe("Workgraph runtime", () => {
     outbox.close();
   });
 
+  it("uses the exact Multica task as the managed run identity", () => {
+    const outbox = new WorkgraphOutbox(join(mkdtempSync(join(tmpdir(), "workgraph-")), "outbox.db"));
+    const runtime = new WorkgraphRuntime({
+      outbox,
+      env: { MULTICA_TASK_ID: "task-1", WORKGRAPH_DATASET_PREFIX: "brwsr-initiative" },
+      multica: new MulticaReader({ run: vi.fn() }),
+    });
+    runtime.lockInitiative({ issue: { id: initiative }, root: { id: initiative }, chain: [initiative] });
+    expect(runtime.scope).toMatchObject({
+      taskId: "task-1",
+      runId: "task-1",
+      dataset: `brwsr-initiative-${initiative}`,
+    });
+    expect(runtime.timeline()[0]).toMatchObject({ taskId: "task-1", runId: "task-1" });
+    outbox.close();
+  });
+
+  it("prefers a dedicated Multica run identity when supplied", () => {
+    const outbox = new WorkgraphOutbox(join(mkdtempSync(join(tmpdir(), "workgraph-")), "outbox.db"));
+    const runtime = new WorkgraphRuntime({
+      outbox,
+      env: { MULTICA_TASK_ID: "task-1", MULTICA_RUN_ID: "run-1" },
+      multica: new MulticaReader({ run: vi.fn() }),
+    });
+    runtime.lockInitiative({ issue: { id: initiative }, root: { id: initiative }, chain: [initiative] });
+    expect(runtime.scope).toMatchObject({ taskId: "task-1", runId: "run-1" });
+    outbox.close();
+  });
+
   it("uses the user data directory by default", () => {
     const dataHome = mkdtempSync(join(tmpdir(), "workgraph-data-"));
     const runtime = new WorkgraphRuntime({
