@@ -8,6 +8,11 @@ Initiative-scoped knowledge graph and durable memory for
 > **Status: experimental.** Workgraph is ready for evaluation, but its public
 > configuration and data format may still change before `1.0`.
 
+The accepted direction for workspace-level datasets, initiative NodeSets,
+two-lane recall, and a generic work ontology is specified in the
+[Workspace-scoped Workgraph memory plan](docs/workspace-memory-plan.md). The Pi
+extension and its lifecycle hooks remain Workgraph's integration boundary.
+
 Multica already knows which issues, tasks, agents, and runs belong to a piece of
 work. Cognee can turn bounded records into searchable semantic memory. Workgraph
 connects the two: it resolves a Pi run to the root Multica issue, gives that
