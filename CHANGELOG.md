@@ -2,10 +2,9 @@
 
 ## Unreleased
 
-- Add the implementation plan for a single universal Workgraph MCP core shared
-  by Pi, Claude Code, and other MCP-capable Multica agents, using one dataset per
-  workspace, readable initiative NodeSets, bounded cross-initiative recall, and
-  a workflow plus engineering-work ontology.
+- Add the implementation plan for evolving the existing Pi extension to one
+  Cognee dataset per Multica workspace, readable initiative NodeSets, bounded
+  two-lane recall, and a generic work ontology.
 - Preserve managed-run provenance on current Multica releases by using the
   exact agent task UUID as the run identity when no separate run UUID is
   exported, while still preferring `MULTICA_RUN_ID` when available.
