@@ -1,6 +1,6 @@
 # Workgraph
 
-Initiative-scoped knowledge graph and durable memory for
+Workspace-scoped knowledge graph and durable initiative memory for
 [Multica](https://github.com/multica-ai/multica) agents running
 [Pi](https://github.com/earendil-works/pi), backed by
 [Cognee](https://github.com/topoteretes/cognee).
@@ -15,9 +15,9 @@ extension and its lifecycle hooks remain Workgraph's integration boundary.
 
 Multica already knows which issues, tasks, agents, and runs belong to a piece of
 work. Cognee can turn bounded records into searchable semantic memory. Workgraph
-connects the two: it resolves a Pi run to the root Multica issue, gives that
-initiative one isolated Cognee dataset, and keeps an exact local delivery
-timeline in SQLite.
+connects the two: it resolves a Pi run to the root Multica issue, selects one
+Cognee dataset for the verified workspace, scopes initiative records with
+NodeSets, and keeps an exact local delivery timeline in SQLite.
 
 Use Workgraph when several Pi runs, repositories, or Multica projects contribute
 to one initiative and should share context without sharing all agent memory.
@@ -26,9 +26,9 @@ Workgraph is not a generic personal-memory plugin.
 ## What it does
 
 - Resolves the current task or issue through Multica's persisted parent chain.
-- Maps the root issue UUID to `workgraph-initiative-<root-uuid>` in Cognee.
-- Locks that dataset for the lifetime of the Pi process.
-- Recalls bounded semantic context before each agent turn.
+- Maps the workspace UUID to `workgraph-workspace-<workspace-uuid>` in Cognee.
+- Locks the workspace dataset and active initiative for the Pi process lifetime.
+- Recalls bounded current-initiative context plus a smaller related-history lane.
 - Records sourced decisions, blockers, artifacts, evidence, and run summaries.
 - Keeps writes in a durable SQLite outbox when Cognee is unavailable.
 - Exposes an exact initiative timeline separately from Cognee's
@@ -44,14 +44,15 @@ tool output, or expose global search and destructive memory tools.
 Multica task
   -> issue
   -> parent issue (possibly in another project)
-  -> root issue UUID
-  -> Cognee dataset: workgraph-initiative-<root-uuid>
+  -> root issue UUID and readable identifier
+  -> initiative:<identifier> NodeSet
+  -> Cognee dataset: workgraph-workspace-<workspace-uuid>
 ```
 
-The Multica workspace is the security boundary. Projects and repositories are
-record properties, not memory namespaces. A process that cannot verify one root
-enters `No initiative` mode: Pi remains usable, but recall, timeline access, and
-writes are disabled.
+The Multica workspace is the dataset security boundary. Initiative, project,
+stage, and repository NodeSets are semantic subsets, not authorization
+boundaries. A process that cannot verify one root enters `No initiative` mode:
+Pi remains usable, but recall, timeline access, and writes are disabled.
 
 ## Prerequisites
 
@@ -147,13 +148,12 @@ rejected because it could make dataset selection ambiguous to a human operator.
 Ask Pi to call `initiative_memory_status`. A working setup reports:
 
 - `mode: "initiative"`;
-- the expected root UUID and `workgraph-initiative-...` dataset;
+- the expected root UUID, readable identifier, and `workgraph-workspace-...` dataset;
 - `cogneeConfigured: true`.
 
-You can then ask Pi to remember a sourced decision and recall it later. Cognee
-ingestion runs in the background and can take time. `initiative_timeline` shows
-the exact local event and whether Cognee accepted it for processing; acceptance
-does not mean graph extraction has already completed.
+You can then ask Pi to remember a sourced decision and recall it later.
+`initiative_timeline` shows the exact local event and whether synchronous Cognee
+ingestion completed. Failed or interrupted writes remain pending for retry.
 
 ## Managed Multica runs
 
@@ -216,11 +216,11 @@ leave the host when Cognee uses an external LLM or embedding provider.
 The exact event timeline and pending delivery payloads are stored by default at:
 
 ```text
-$XDG_DATA_HOME/workgraph/workgraph.db
+$XDG_DATA_HOME/workgraph/workgraph-workspace.db
 ```
 
 When `XDG_DATA_HOME` is unset, the default is
-`~/.local/share/workgraph/workgraph.db`. For a server or container, point
+`~/.local/share/workgraph/workgraph-workspace.db`. For a server or container, point
 `WORKGRAPH_DATA_DIR` at a persistent writable volume, for example:
 
 ```bash
@@ -232,18 +232,16 @@ survive restarts.
 
 ### Upgrading an earlier pre-release checkout
 
-Earlier Workgraph commits used `brwsr-initiative-...` datasets and a `brwsr.db`
-file. This release deliberately replaces those internal names. There is no
-automatic migration: stop all Workgraph processes and either begin with fresh
-evaluation data or migrate the SQLite file and already delivered Cognee datasets
-before relying on the new names.
+Earlier pre-release Workgraph versions used initiative datasets and other SQLite
+filenames. This release does not migrate, replay, query, or modify those stores.
+It starts with `workgraph-workspace.db` and the workspace dataset namespace.
 
 ## Pi tools
 
 | Tool | Purpose |
 | --- | --- |
 | `initiative_memory_status` | Show scope, backend, and pending writes |
-| `initiative_memory_recall` | Search only the locked initiative dataset |
+| `initiative_memory_recall` | Search the current initiative or bounded related workspace history |
 | `initiative_memory_remember` | Append one bounded, sourced memory record |
 | `initiative_timeline` | Read the exact ordered SQLite event timeline |
 
@@ -261,8 +259,8 @@ argument.
 | `COGNEE_API_KEY` | Except `none` | Cloud API key or self-hosted bearer token |
 | `COGNEE_TENANT_ID` | Cognee Cloud | Tenant ID sent as `X-Tenant-Id` |
 | `WORKGRAPH_COGNEE_TIMEOUT_MS` | No | HTTP timeout; default `3000` |
+| `WORKGRAPH_COGNEE_REMEMBER_TIMEOUT_MS` | No | Synchronous ingestion and delivery timeout; default `120000` |
 | `WORKGRAPH_DATA_DIR` | No | Persistent SQLite directory |
-| `WORKGRAPH_DATASET_PREFIX` | No | Dataset prefix; default `workgraph-initiative` |
 | `MULTICA_WORKSPACE_ID` | Managed run | Workspace used for every Multica read |
 | `MULTICA_TASK_ID` | Managed run | Exact assigned agent task and fallback run identity |
 | `MULTICA_RUN_ID` | No | Optional distinct run identity; takes precedence over the task UUID |
@@ -281,9 +279,10 @@ Credentials are read only from the process environment.
 | Event order and delivery | Workgraph SQLite | Use the timeline tool |
 | Semantic context | Cognee | Non-authoritative recall lead |
 
-Cognee failure never blocks Pi. A failed write remains pending in SQLite and is
-retried during later writes or shutdown. If Multica becomes unavailable for an
-operation, Workgraph omits memory for that operation. If Multica reports a
+Cognee recall failure does not discard a successful authoritative Multica read.
+A failed write remains pending in SQLite and is retried during later writes or
+shutdown. If Multica becomes unavailable for an operation, Workgraph omits
+memory for that operation. If Multica reports a
 different root after scope was locked, the operation fails closed and the
 process never switches datasets.
 
@@ -355,4 +354,4 @@ delivery.
 Workgraph is a fork of
 [`@kerryhatcher/pi-cognee`](https://github.com/kerryhatcher/pi-cognee). It
 retains the upstream MIT license while replacing the generic SDK/MCP and
-destructive tool surface with the initiative-scoped architecture above.
+destructive tool surface with the workspace-scoped architecture above.

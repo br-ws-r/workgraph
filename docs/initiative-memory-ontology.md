@@ -1,63 +1,115 @@
-# Initiative Memory Ontology
+# Workspace Memory Ontology
 
-This document and `src/schema.ts` are the canonical, backend-neutral Workgraph
-vocabulary. Cognee stores records and extracts a semantic graph; it is not the
-authority for the vocabulary itself.
+This document and `src/schema.ts` define the backend-neutral Workgraph
+vocabulary. Cognee stores a semantic projection; it is not the authority for
+the vocabulary or current work state.
 
 ## Entity types
 
-`Issue`, `Task`, `Agent`, `Squad`, `Handoff`, `Decision`, `Blocker`, `Artifact`,
-`Repository`, `Run`, `Evidence`, and `Conflict`.
+- `Initiative`, `Issue`, and `Task` describe planned work.
+- `Agent` and `Squad` describe actors.
+- `Decision`, `Constraint`, `Risk`, `Blocker`, and `Conflict` describe choices
+  and impediments.
+- `Handoff` describes a transfer of responsibility or context.
+- `Artifact` describes any produced object, including a document, report,
+  design, campaign, contract, deployment, or code change.
+- `Evidence` describes a test, measurement, review, research result, or
+  approval.
+- `Run` describes one managed or interactive execution.
+- `Outcome` describes a bounded result.
 
 ## Relation types
 
-`root_of`, `child_of`, `assigned_to`, `owned_by`, `delegated_to`, `blocked_by`,
-`depends_on`, `produced`, `for`, `supports`, `from`, `about`, `verified_by`,
-`implemented_in`, and `observed_in`.
+`root_of`, `child_of`, `part_of`, `assigned_to`, `owned_by`, `delegated_to`,
+`blocked_by`, `depends_on`, `produced`, `supports`, `contradicts`,
+`derived_from`, `about`, `verified_by`, `resulted_in`, `observed_in`, and
+`related_to`.
+
+Domain-specific detail belongs in stable entity identifiers, bounded summaries,
+sources, and these relations. Workgraph does not model source trees, symbols,
+transcript turns, or log lines as ontology types.
 
 ## Authority
 
-- `confirmed`: explicitly verified evidence or decision.
+- `confirmed`: explicitly verified evidence or a decision.
 - `observed`: a bounded read-back from an authoritative system.
 - `proposed`: a proposal that has not become authoritative state.
 - `inferred`: semantic retrieval or model-derived interpretation.
 
-Fresh Multica and GitHub state always outranks every Workgraph record,
-including a previously `confirmed` record that has become stale.
+Fresh systems of record always outrank remembered state, including a previously
+confirmed record that has become stale.
 
-## Record envelope
+## Workspace envelope
 
-Every permanent record has this validated shape:
+Every permanent record uses the current `schema_version` and
+`extraction_prompt_version`, and includes validated workspace, root initiative,
+current issue, authority, provenance, and observation time:
 
 ```json
 {
+  "schema_version": "2.0.0",
+  "extraction_prompt_version": "1.0.0",
+  "workspace_id": "00000000-0000-4000-8000-000000000010",
+  "initiative_id": "00000000-0000-4000-8000-000000000001",
+  "initiative_identifier": "B-184",
+  "issue_id": "00000000-0000-4000-8000-000000000002",
   "entity_type": "Decision",
   "authority": "confirmed",
-  "initiative_id": "00000000-0000-4000-8000-000000000001",
-  "entity_id": "decision:one-dataset-per-initiative",
-  "summary": "Use one Cognee dataset per root Multica initiative.",
+  "entity_id": "decision:workspace-memory",
+  "summary": "Use one memory dataset per verified workspace.",
   "relations": [
     { "type": "about", "target": "issue:00000000-0000-4000-8000-000000000001" }
   ],
-  "source": "multica://issues/00000000-0000-4000-8000-000000000001",
-  "source_revision": "optional-source-revision",
-  "observed_at": "2026-08-30T09:00:00Z"
+  "node_sets": [
+    "initiative:B-184",
+    "type:decision",
+    "authority:confirmed"
+  ],
+  "source": "multica://issues/00000000-0000-4000-8000-000000000002",
+  "observed_at": "2026-09-04T09:00:00Z"
 }
 ```
 
-Summaries are bounded to 4,000 characters. Sources, timestamps, authority, and
-stable entity identifiers are mandatory. Secrets, raw transcripts, raw tool
+Summaries are bounded to 4,000 characters. Secrets, raw transcripts, raw tool
 output, shell logs, full diffs, and unrestricted file contents are forbidden.
 
-## Timeline versus semantic graph
+## Scope and NodeSets
 
-SQLite is the exact event audit and delivery source. Event payloads are
-append-only; delivery attempts and results are mutable metadata. Cognee provides
-semantic answers over the same bounded records. Chronology and delivery status
-must be read from `initiative_timeline`, never reconstructed through temporal
-LLM extraction. Reingestion can rebuild a useful graph, but graph extraction is
-not expected to be bit-for-bit deterministic across model or Cognee versions.
+A verified workspace UUID selects
+`workgraph-workspace-<workspace-uuid>`. The root issue UUID remains canonical
+in `initiative_id`; the stable readable Multica identifier is retained as
+`initiative_identifier`.
 
-The initial release uses Cognee's default extraction. A custom Cognee graph
-model is permitted only after tests demonstrate inconsistent entity or relation
-mapping, and its definition must live in this repository.
+Workgraph derives the complete ordered NodeSet list server-side. Every record
+has exactly one `initiative:`, `type:`, and `authority:` NodeSet. It may also
+have `project:`, `stage:`, and `repo:` NodeSets when matching verified
+structured metadata is explicitly present. A repository NodeSet is never
+inferred from a source URL, title, branch, prompt, or other free-form text.
+
+NodeSet values are trimmed, Unicode-normalized with NFKD, and runs outside
+ASCII letters, digits, `.`, `_`, and `-` become one `-`. Repeated punctuation
+and leading or trailing punctuation are removed. Any transformed or overlong
+value receives a deterministic hash suffix so distinct source identifiers do
+not collapse to the same label. Values are bounded to 96 characters and empty
+results are rejected. The complete label is bounded to 128 characters,
+optional labels have a fixed prefix, and record validation requires the exact
+deterministic order. Callers cannot append arbitrary labels.
+
+The complete UTF-8 serialized memory record is limited to 12,000 bytes and sent
+with a 16,384-character Cognee chunk size so `CHUNKS` recall can validate one
+whole record rather than an arbitrary fragment.
+
+Datasets are permission and retention boundaries. NodeSets are semantic subsets
+and must not be treated as authorization boundaries.
+
+## Extraction and timeline
+
+The versioned generic extraction prompt asks Cognee to preserve canonical
+concepts, bounded relations, stable IDs, authority, and provenance without
+inventing current state. The prompt is guidance for a non-deterministic semantic
+projection, not a claim that an RDF/OWL ontology is loaded.
+
+SQLite is the exact append-only event and delivery source. Chronology and
+delivery status come from the local timeline, never temporal model extraction.
+Reingestion may rebuild a useful graph but is not expected to be bit-for-bit
+deterministic across model or Cognee versions.
