@@ -354,7 +354,7 @@ closed; concurrent outbox tests pass.
 - Add a tested Recall API compatibility layer.
 - Implement initiative and workspace recall primitives with normalized
   provenance.
-- Test background ingestion acceptance, outage retry, and pipeline errors.
+- Test synchronous ingestion completion, outage retry, and pipeline errors.
 
 Acceptance: initiative recall does not leak unrelated work; workspace recall
 finds a related record from another initiative and identifies its provenance.

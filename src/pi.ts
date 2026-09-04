@@ -39,55 +39,45 @@ export function createWorkgraphExtension(options: WorkgraphPiOptions = {}) {
 
     pi.on("before_agent_start", async (event, ctx) => {
       if (!runtime.scope) return undefined;
-      let authoritative = "Authoritative Multica read-back unavailable for this turn.";
       try {
-        const resolution = await runtime.refreshIssue();
-        if (resolution) authoritative = JSON.stringify({
-          issue_id: resolution.issue.id,
-          title: resolution.issue.title,
-          status: resolution.issue.status,
-          root_issue_id: resolution.root.id,
-          root_title: resolution.root.title,
+        const context = await runtime.context(event.prompt, ctx.signal);
+        const authoritative = JSON.stringify({
+          workspace_id: context.resolution.issue.workspace_id,
+          issue_id: context.resolution.issue.id,
+          issue_identifier: context.resolution.issue.identifier,
+          title: context.resolution.issue.title,
+          status: context.resolution.issue.status,
+          status_category: context.resolution.issue.status_category,
+          root_issue_id: context.resolution.root.id,
+          root_identifier: context.resolution.root.identifier,
+          root_title: context.resolution.root.title,
         });
-      } catch { /* fail open without stale authority claims */ }
-      let memory = "Cognee recall unavailable for this turn.";
-      try {
-        const result = await runtime.recall(event.prompt, 8, ctx.signal);
-        if (result !== undefined) memory = boundText(JSON.stringify(result), 6000);
-      } catch { /* fail open */ }
-      return {
-        systemPrompt: `${event.systemPrompt}\n\n## Workgraph initiative context\nAuthoritative current state (Multica; re-read before any mutation):\n${authoritative}\n\nNon-authoritative memory (Cognee; verify time-sensitive claims):\n${memory}\n\nNever use Workgraph memory to override Multica workflow state or GitHub delivery state.`,
-      };
+        const initiativeMemory = boundText(JSON.stringify(context.memory.initiative ?? []), 6000);
+        const workspaceHistory = boundText(JSON.stringify(context.memory.workspace ?? []), 3000);
+        const memoryStatus = context.memoryError
+          ? `Cognee recall unavailable for this turn: ${context.memoryError}`
+          : "Cognee recall completed for this turn.";
+        return {
+          systemPrompt: `${event.systemPrompt}\n\n## Workgraph workspace context\nAuthoritative current state (Multica; re-read before any mutation):\n${authoritative}\n\nMemory status:\n${memoryStatus}\n\nNon-authoritative current initiative memory (Cognee):\n${initiativeMemory}\n\nNon-authoritative related workspace history (Cognee; each item identifies its initiative and provenance):\n${workspaceHistory}\n\nNever use Workgraph memory to override Multica workflow state, repository state, or delivery state.`,
+        };
+      } catch {
+        return {
+          systemPrompt: `${event.systemPrompt}\n\n## Workgraph workspace context\nAuthoritative Multica read-back was unavailable. Workgraph memory is omitted for this turn; do not rely on stale workflow or memory state.`,
+        };
+      }
     });
 
     pi.on("agent_settled", async () => {
       if (!runtime.scope) return;
       try {
-        const resolution = await runtime.refreshIssue();
-        if (resolution) runtime.remember({
-          entityType: "Run",
-          authority: "observed",
-          summary: `Run ${runtime.scope.runId ?? "interactive"} settled. Multica issue ${resolution.issue.title ?? resolution.issue.id} is ${resolution.issue.status ?? "unknown"}.`,
-          source: runtime.issueSource(),
-          entityId: `run:${runtime.scope.runId ?? runtime.scope.issueId}`,
-          relations: [{ type: "observed_in", target: `issue:${runtime.scope.issueId}` }],
-          eventType: "run_settled",
-        });
+        await runtime.settle();
       } catch { /* keep Pi usable and leave prior pending records in the outbox */ }
     });
 
     pi.on("session_before_compact", async () => {
       if (!runtime.scope) return;
       try {
-        const resolution = await runtime.refreshIssue();
-        if (resolution) runtime.remember({
-          entityType: "Run",
-          authority: "observed",
-          summary: `Compaction anchor for issue ${resolution.issue.title ?? resolution.issue.id}; authoritative status ${resolution.issue.status ?? "unknown"}. Consult the Workgraph timeline for recorded decisions, blockers, artifacts, and evidence.`,
-          source: runtime.issueSource(),
-          entityId: `run:${runtime.scope.runId ?? runtime.scope.issueId}:compaction:${Date.now()}`,
-          eventType: "compaction_anchor",
-        });
+        await runtime.compact();
       } catch { /* compaction must never be blocked */ }
     });
 
@@ -108,7 +98,7 @@ function registerTools(pi: ExtensionAPI, runtime: WorkgraphRuntime): void {
     parameters: Type.Object({}),
     async execute() {
       const scope = runtime.scope;
-      const pending = scope ? runtime.outbox.pending(500).filter((event) => event.initiativeId === scope.initiativeId).length : 0;
+      const pending = runtime.pendingCount();
       return result({ mode: scope ? "initiative" : "no-initiative", scope, cogneeConfigured: Boolean(runtime.cognee), pending });
     },
   });
@@ -116,11 +106,15 @@ function registerTools(pi: ExtensionAPI, runtime: WorkgraphRuntime): void {
   pi.registerTool({
     name: "initiative_memory_recall",
     label: "Recall Initiative Memory",
-    description: "Recall only from the immutable active initiative dataset. Never searches globally.",
-    parameters: Type.Object({ query: Type.String({ minLength: 1, maxLength: 2000 }), top_k: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })) }),
+    description: "Recall the current initiative or bounded related history within the locked workspace dataset.",
+    parameters: Type.Object({
+      query: Type.String({ minLength: 1, maxLength: 2000 }),
+      scope: Type.Optional(StringEnum(["initiative", "workspace", "both"] as const)),
+      top_k: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })),
+    }),
     async execute(_id, params, signal) {
       if (!runtime.scope) throw new Error("No initiative is selected; recall is disabled");
-      return result(await runtime.recall(params.query, params.top_k ?? 8, signal));
+      return result(await runtime.recall(params.query, params.scope ?? "initiative", params.top_k ?? 8, signal));
     },
   });
 
@@ -141,7 +135,7 @@ function registerTools(pi: ExtensionAPI, runtime: WorkgraphRuntime): void {
       }), { maxItems: 25 })),
     }),
     async execute(_id, params) {
-      const event = runtime.remember({
+      const event = await runtime.remember({
         entityType: params.entity_type,
         entityId: params.entity_id,
         authority: params.authority,
@@ -167,6 +161,9 @@ function registerTools(pi: ExtensionAPI, runtime: WorkgraphRuntime): void {
         agent_id: event.agentId,
         run_id: event.runId,
         event_type: event.eventType,
+        workspace_id: event.workspaceId,
+        initiative_identifier: event.initiativeIdentifier,
+        issue_id: event.issueId,
         summary: event.boundedSummary,
         source: event.source,
         authority: event.authority,
