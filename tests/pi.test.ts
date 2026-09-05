@@ -8,6 +8,7 @@ type Handler = (event: any, context: any) => any;
 const workspace = "00000000-0000-4000-8000-000000000010";
 const initiative = "00000000-0000-4000-8000-000000000001";
 const issueId = "00000000-0000-4000-8000-000000000002";
+const project = "00000000-0000-4000-8000-000000000011";
 
 function resolution() {
   return {
@@ -66,6 +67,7 @@ function fakeRuntime() {
     cognee: {},
     multica: {
       workspace: vi.fn(async () => resolved.workspace),
+      project: vi.fn(),
       resolveIssue: vi.fn(), resolveTask: vi.fn(), recentRootInitiatives: vi.fn(),
     },
     lockInitiative: vi.fn(),
@@ -203,8 +205,12 @@ describe("Workgraph Pi extension", () => {
       id: `00000000-0000-4000-8000-${String(201 - index).padStart(12, "0")}`,
       identifier,
       title: `Initiative ${identifier}`,
+      project_id: index < 2 ? project : null,
     }));
     vi.mocked(runtime.multica.recentRootInitiatives).mockResolvedValueOnce(roots);
+    vi.mocked(runtime.multica.project).mockResolvedValue({
+      id: project, workspace_id: workspace, title: "Devbox Platform",
+    });
     vi.mocked(runtime.multica.resolveIssue).mockResolvedValueOnce(resolution());
     vi.mocked(runtime.lockInitiative).mockReturnValueOnce(runtime.scope!);
     const harness = install(runtime);
@@ -217,10 +223,11 @@ describe("Workgraph Pi extension", () => {
 
     expect(runtime.multica.workspace).toHaveBeenCalledOnce();
     expect(runtime.multica.recentRootInitiatives).toHaveBeenCalledWith(workspace, 3);
+    expect(runtime.multica.project).toHaveBeenCalledOnce();
     expect(ui.select).toHaveBeenCalledWith("Select initiative", [
-      "Initiative B-201 [in_progress] (B-201)",
-      "Initiative B-200 [in_progress] (B-200)",
-      "Initiative B-184 [in_progress] (B-184)",
+      "B-201 [devbox-platform] - Initiative B-201 [in_progress]",
+      "B-200 [devbox-platform] - Initiative B-200 [in_progress]",
+      "B-184 - Initiative B-184 [in_progress]",
       "Enter initiative ID (XYZ-123)",
       "No initiative",
     ]);

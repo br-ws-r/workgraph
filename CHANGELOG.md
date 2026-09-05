@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Put readable issue IDs first in the interactive selector and show the current
+  normalized project title when the initiative belongs to a project.
 - Use the current Multica profile workspace for interactive Pi selection when
   `MULTICA_WORKSPACE_ID` is absent; keep the variable required for managed runs.
 - Introduce schema v3 readable workspace, issue, project, entity, relation, and
