@@ -26,7 +26,7 @@ Workgraph is not a generic personal-memory plugin.
 ## What it does
 
 - Resolves the current task or issue through Multica's persisted parent chain.
-- Maps the workspace UUID to `workgraph-workspace-<workspace-uuid>` in Cognee.
+- Maps the readable workspace slug to `workgraph-workspace-<workspace-slug>` in Cognee.
 - Locks the workspace dataset and active initiative for the Pi process lifetime.
 - Recalls bounded current-initiative context plus a smaller related-history lane.
 - Records sourced decisions, blockers, artifacts, evidence, and run summaries.
@@ -44,9 +44,9 @@ tool output, or expose global search and destructive memory tools.
 Multica task
   -> issue
   -> parent issue (possibly in another project)
-  -> root issue UUID and readable identifier
+  -> root issue UUID (internal provenance) and readable identifier
   -> initiative:<identifier> NodeSet
-  -> Cognee dataset: workgraph-workspace-<workspace-uuid>
+  -> Cognee dataset: workgraph-workspace-<workspace-slug>
 ```
 
 The Multica workspace is the dataset security boundary. Initiative, project,
@@ -135,20 +135,25 @@ Cognee documents these values in its
 
 ### 4. Start an interactive initiative
 
-Run Pi with the UUID of a **root** Multica issue:
+Run Pi with the human-readable identifier of a **root** Multica issue:
 
 ```bash
-pi --initiative 00000000-0000-4000-8000-000000000001
+pi --initiative B-184
 ```
 
 If you omit `--initiative` in an interactive terminal, Workgraph offers recent
-active root issues from the selected Multica workspace. A child issue is
-rejected because it could make dataset selection ambiguous to a human operator.
+active root issues from the selected Multica workspace. The selector shows the
+three most recently updated initiatives with readable IDs such as `B-184`, and
+manual entry accepts the same `XYZ-123` form. A child issue is rejected because
+it could make dataset selection ambiguous to a human operator. Workgraph walks
+the paginated Multica issue list before sorting, so older active initiatives are
+not hidden by the first board page.
 
 Ask Pi to call `initiative_memory_status`. A working setup reports:
 
 - `mode: "initiative"`;
-- the expected root UUID, readable identifier, and `workgraph-workspace-...` dataset;
+- the expected readable workspace, initiative and issue identifiers, plus the
+  `workgraph-workspace-...` dataset;
 - `cogneeConfigured: true`.
 
 You can then ask Pi to remember a sourced decision and recall it later.
@@ -216,11 +221,11 @@ leave the host when Cognee uses an external LLM or embedding provider.
 The exact event timeline and pending delivery payloads are stored by default at:
 
 ```text
-$XDG_DATA_HOME/workgraph/workgraph-workspace.db
+$XDG_DATA_HOME/workgraph/workgraph-workspace-v3.db
 ```
 
 When `XDG_DATA_HOME` is unset, the default is
-`~/.local/share/workgraph/workgraph-workspace.db`. For a server or container, point
+`~/.local/share/workgraph/workgraph-workspace-v3.db`. For a server or container, point
 `WORKGRAPH_DATA_DIR` at a persistent writable volume, for example:
 
 ```bash
@@ -232,9 +237,10 @@ survive restarts.
 
 ### Upgrading an earlier pre-release checkout
 
-Earlier pre-release Workgraph versions used initiative datasets and other SQLite
-filenames. This release does not migrate, replay, query, or modify those stores.
-It starts with `workgraph-workspace.db` and the workspace dataset namespace.
+Earlier pre-release Workgraph versions used UUID-named datasets and older SQLite
+schemas. This release does not migrate, replay, query, or modify those stores.
+Schema v3 starts with `workgraph-workspace-v3.db` and the readable
+`workgraph-workspace-<workspace-slug>` dataset namespace.
 
 ## Pi tools
 
@@ -245,10 +251,12 @@ It starts with `workgraph-workspace.db` and the workspace dataset namespace.
 | `initiative_memory_remember` | Append one bounded, sourced memory record |
 | `initiative_timeline` | Read the exact ordered SQLite event timeline |
 
-`initiative_memory_remember` accepts an optional stable `entity_id`. Supply one
-when later records should refer to the same decision, blocker, or artifact;
-otherwise Workgraph creates a unique ID. None of the tools accepts a dataset
-argument.
+`initiative_memory_remember` accepts an optional stable `entity_identifier` and
+`entity_label`. Supply a readable identifier when later records should refer to
+the same decision, blocker, or artifact; otherwise Workgraph creates one from
+the issue identifier, observation time, and a short hash. Full UUIDs are rejected
+from semantic identifiers, relation targets, labels, datasets, and NodeSets.
+None of the tools accepts a dataset argument.
 
 ## Runtime configuration reference
 
@@ -282,9 +290,9 @@ Credentials are read only from the process environment.
 Cognee recall failure does not discard a successful authoritative Multica read.
 A failed write remains pending in SQLite and is retried during later writes or
 shutdown. If Multica becomes unavailable for an operation, Workgraph omits
-memory for that operation. If Multica reports a
-different root after scope was locked, the operation fails closed and the
-process never switches datasets.
+memory for that operation. If Multica reports a different workspace, root,
+issue, project, parent, or readable identifier after scope was locked, the
+operation fails closed and the process never switches datasets.
 
 SQLite event payloads are append-only. Delivery attempt counters, delivery
 timestamps, and bounded errors are mutable metadata on those events. Workgraph
@@ -307,6 +315,10 @@ responsible for what they submit to `initiative_memory_remember`.
 Workgraph exposes no delete, forget, arbitrary-dataset, global-search, raw-query,
 or graph-administration operation.
 
+Workgraph uses permanent Cognee Remember calls without a `session_id`. Records
+therefore belong to the workspace dataset/Brain; an empty Cognee `Sessions` view
+is expected and does not indicate missing Workgraph memory.
+
 ## Ontology and lifecycle
 
 The backend-neutral record vocabulary is documented in
@@ -318,11 +330,29 @@ extraction; Workgraph does not install a custom graph model.
 | --- | --- |
 | `session_start` | Resolve and lock one verified initiative |
 | `before_agent_start` | Refresh, recall, and inject separated context |
-| `agent_settled` | Record the run/issue state and schedule delivery |
-| `session_before_compact` | Record a run/status anchor |
-| `session_shutdown` | Flush pending delivery and close SQLite |
+| `agent_settled` | Reconcile new Multica issue activity, then record the run/issue state |
+| `session_before_compact` | Reconcile new activity, then record a run/status anchor |
+| `session_shutdown` | Reconcile new activity, flush pending delivery, and close SQLite |
 
-General `tool_execution_end` capture is deliberately absent.
+At session start Workgraph establishes a durable baseline of server activity
+IDs without importing old issue history. Later lifecycle hooks read
+`multica issue timeline --activity-only --output json`, append each new server
+activity once, and confirm the current issue and immutable root with a fresh
+Multica read. Deterministic event IDs make retries safe across concurrent Pi
+processes. Tracking exact IDs also avoids relying on Multica v0.4.35's
+second-precision JSON timestamps. A truncated timeline fails closed when it no
+longer overlaps the stored activity IDs. If the initial baseline cannot be
+established, Workgraph persists a failed state and will not silently establish
+it later, including after a process restart. An operator must investigate the
+missing baseline before clearing that issue's `multica_activity_state` and
+`multica_activity_seen` rows from the local Workgraph SQLite database.
+
+This reconciliation covers activity records emitted by Multica v0.4.35, such
+as status, priority, assignee, title, date, task outcome, and squad evaluation
+events. It is not a complete audit feed for labels, metadata, attachments, or
+arbitrary workspace objects. General `tool_execution_end` capture remains
+deliberately absent; Workgraph does not parse prompts, shell commands, or tool
+output to infer mutations.
 
 ## Multica hierarchy assumptions
 
@@ -345,8 +375,8 @@ npm run check
 ```
 
 The tests cover dataset derivation, exact task and parent-chain resolution,
-cross-project traversal, scope immutability, `No initiative`, outbox ordering and
-idempotency, Cognee endpoint routing and authentication, and outage-safe
+cross-project traversal, scope immutability, `No initiative`, Multica activity
+reconciliation and cursor safety, outbox ordering and idempotency, Cognee endpoint routing and authentication, and outage-safe
 delivery.
 
 ## Provenance and license

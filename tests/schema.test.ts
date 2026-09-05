@@ -22,16 +22,20 @@ function record(overrides: Record<string, unknown> = {}) {
     schema_version: SCHEMA_VERSION,
     extraction_prompt_version: EXTRACTION_PROMPT_VERSION,
     workspace_id: workspace,
+    workspace_identifier: "brwsr",
+    workspace_name: "BRWSR",
     initiative_id: initiative,
     initiative_identifier: "B-184",
     issue_id: issue,
+    issue_identifier: "B-185",
     entity_type: "Decision",
     authority: "confirmed",
-    entity_id: "decision:workspace-memory",
+    entity_identifier: "decision:workspace-memory",
+    entity_label: "Workspace memory decision",
     summary: "Keep memory scoped.",
-    relations: [{ type: "about", target: `issue:${initiative}` }],
+    relations: [{ type: "about", target: "issue:B-185" }],
     node_sets: ["initiative:B-184", "type:decision", "authority:confirmed"],
-    source: `multica://issues/${issue}`,
+    source: "multica://issues/B-185",
     observed_at: "2026-09-04T09:00:00.000Z",
     ...overrides,
   };
@@ -53,26 +57,27 @@ describe("workspace memory schema", () => {
     expect(EXTRACTION_PROMPT).toContain("Constraint");
   });
 
-  it("derives one stable dataset from the workspace UUID", () => {
-    expect(datasetForWorkspace(workspace)).toBe(`workgraph-workspace-${workspace}`);
-    expect(datasetForWorkspace(workspace.toUpperCase())).toBe(`workgraph-workspace-${workspace}`);
+  it("derives one readable dataset from the workspace identifier", () => {
+    expect(datasetForWorkspace("brwsr")).toBe("workgraph-workspace-brwsr");
+    expect(datasetForWorkspace("BRWSR")).toBe("workgraph-workspace-brwsr");
   });
 
   it("rejects invalid workspaces", () => {
-    expect(() => datasetForWorkspace("workspace")).toThrow();
+    expect(() => datasetForWorkspace("///")).toThrow();
+    expect(() => datasetForWorkspace(workspace)).toThrow("internal UUIDs");
   });
 
   it("derives bounded mandatory and verified optional NodeSets deterministically", () => {
     const input = {
       initiativeIdentifier: " B-184 ", entityType: "Decision" as const,
       authority: "confirmed" as const,
-      projectId: "00000000-0000-4000-8000-000000000099",
-      parentIssueId: issue, stage: 3, repositoryIdentifier: "br-ws-r/workgraph",
+      projectIdentifier: "devbox-00000000",
+      parentIssueIdentifier: "B-185", stage: 3, repositoryIdentifier: "br-ws-r/workgraph",
     };
     const derived = deriveNodeSets(input);
     expect(derived.slice(0, 5)).toEqual([
       "initiative:B-184", "type:decision", "authority:confirmed",
-      "project:00000000-0000-4000-8000-000000000099", `stage:${issue}-3`,
+      "project:devbox-00000000", "stage:B-185-3",
     ]);
     expect(derived[5]).toMatch(/^repo:br-ws-r-workgraph-[a-f0-9]{10}$/);
     expect(derived).toEqual(deriveNodeSets(input));
@@ -95,15 +100,21 @@ describe("workspace memory schema", () => {
       initiativeIdentifier: "B-184", entityType: "Risk", authority: "observed", stage: 3,
     })).toEqual(["initiative:B-184", "type:risk", "authority:observed"]);
     expect(() => MemoryRecordSchema.parse(record({ stage: 0 }))).toThrow();
+    expect(() => deriveNodeSets({
+      initiativeIdentifier: workspace, entityType: "Risk", authority: "observed",
+    })).toThrow("internal UUIDs");
   });
 
   it("requires the workspace envelope, provenance, versions, and exact derived NodeSets", () => {
     expect(MemoryRecordSchema.parse(record())).toMatchObject({
-      workspace_id: workspace, initiative_id: initiative, initiative_identifier: "B-184", issue_id: issue,
+      workspace_id: workspace, workspace_identifier: "brwsr",
+      initiative_id: initiative, initiative_identifier: "B-184",
+      issue_id: issue, issue_identifier: "B-185",
     });
     for (const field of [
       "schema_version", "extraction_prompt_version", "workspace_id", "initiative_id",
-      "initiative_identifier", "issue_id", "node_sets", "authority", "source", "observed_at",
+      "workspace_identifier", "initiative_identifier", "issue_id", "issue_identifier",
+      "entity_identifier", "entity_label", "node_sets", "authority", "source", "observed_at",
     ]) {
       const invalid = record();
       delete invalid[field];
@@ -118,23 +129,39 @@ describe("workspace memory schema", () => {
   it("accepts optional NodeSets only when their structured metadata matches", () => {
     expect(MemoryRecordSchema.parse(record({
       project_id: "00000000-0000-4000-8000-000000000099",
-      parent_issue_id: issue, stage: 2,
+      project_identifier: "devbox-00000000",
+      parent_issue_id: issue, parent_issue_identifier: "B-185", stage: 2,
       repository_identifier: "br-ws-r/workgraph",
       node_sets: [
         "initiative:B-184", "type:decision", "authority:confirmed",
-        "project:00000000-0000-4000-8000-000000000099",
-        `stage:${issue}-2`, deriveNodeSets({
+        "project:devbox-00000000",
+        "stage:B-185-2", deriveNodeSets({
           initiativeIdentifier: "B-184", entityType: "Decision", authority: "confirmed",
-          projectId: "00000000-0000-4000-8000-000000000099",
-          parentIssueId: issue, stage: 2, repositoryIdentifier: "br-ws-r/workgraph",
+          projectIdentifier: "devbox-00000000",
+          parentIssueIdentifier: "B-185", stage: 2, repositoryIdentifier: "br-ws-r/workgraph",
         })[5],
       ],
     })).node_sets).toHaveLength(6);
+    expect(() => MemoryRecordSchema.parse(record({ project_id: workspace }))).toThrow("provided together");
+    expect(() => MemoryRecordSchema.parse(record({ parent_issue_identifier: "B-184" }))).toThrow("provided together");
+  });
+
+  it("keeps full UUIDs out of semantic identifiers, labels, and relation targets", () => {
+    for (const overrides of [
+      { workspace_identifier: workspace },
+      { initiative_identifier: workspace },
+      { issue_identifier: workspace },
+      { entity_identifier: `decision:${workspace}` },
+      { entity_label: `Decision ${workspace}` },
+      { relations: [{ type: "about", target: `issue:${workspace}` }] },
+    ]) {
+      expect(MemoryRecordSchema.safeParse(record(overrides)).success).toBe(false);
+    }
   });
 
   it("bounds semantic records to one chunk and rejects inconsistent event envelopes", () => {
     expect(() => MemoryRecordSchema.parse(record({
-      entity_id: "x".repeat(512), summary: "s".repeat(4000), source: "p".repeat(1000),
+      entity_identifier: "x".repeat(512), summary: "s".repeat(4000), source: "p".repeat(1000),
       relations: Array.from({ length: 25 }, () => ({ type: "about", target: "t".repeat(512) })),
     }))).toThrow("single-chunk");
 
@@ -144,6 +171,7 @@ describe("workspace memory schema", () => {
       initiativeId: initiative,
       initiativeIdentifier: "B-184",
       issueId: "00000000-0000-4000-8000-000000000099",
+      issueIdentifier: "B-999",
       nodeSets: memoryRecord.node_sets,
       schemaVersion: SCHEMA_VERSION,
       extractionPromptVersion: EXTRACTION_PROMPT_VERSION,

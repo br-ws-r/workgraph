@@ -15,7 +15,7 @@ export function createWorkgraphExtension(options: WorkgraphPiOptions = {}) {
     let started = false;
 
     pi.registerFlag("initiative", {
-      description: "Use the verified root Multica issue UUID as the immutable Workgraph initiative",
+      description: "Use a root Multica issue identifier such as B-184 (UUID also accepted for diagnostics)",
       type: "string",
     });
 
@@ -30,7 +30,12 @@ export function createWorkgraphExtension(options: WorkgraphPiOptions = {}) {
           return;
         }
         const scope = runtime.lockInitiative(resolution);
-        ctx.ui.setStatus("workgraph", `Workgraph: ${scope.rootTitle ?? scope.initiativeId}`);
+        try {
+          await runtime.reconcileActivity();
+        } catch (error) {
+          ctx.ui.notify(`Workgraph activity reconciliation unavailable: ${error instanceof Error ? error.message : String(error)}`, "warning");
+        }
+        ctx.ui.setStatus("workgraph", `Workgraph: ${scope.initiativeIdentifier}${scope.rootTitle ? ` — ${scope.rootTitle}` : ""}`);
       } catch (error) {
         ctx.ui.setStatus("workgraph", "Workgraph: no initiative");
         ctx.ui.notify(`Workgraph disabled: ${error instanceof Error ? error.message : String(error)}`, "warning");
@@ -42,23 +47,20 @@ export function createWorkgraphExtension(options: WorkgraphPiOptions = {}) {
       try {
         const context = await runtime.context(event.prompt, ctx.signal);
         const authoritative = JSON.stringify({
-          workspace_id: context.resolution.issue.workspace_id,
-          issue_id: context.resolution.issue.id,
           issue_identifier: context.resolution.issue.identifier,
           title: context.resolution.issue.title,
           status: context.resolution.issue.status,
           status_category: context.resolution.issue.status_category,
-          root_issue_id: context.resolution.root.id,
-          root_identifier: context.resolution.root.identifier,
-          root_title: context.resolution.root.title,
+          initiative_identifier: context.resolution.root.identifier,
+          initiative_title: context.resolution.root.title,
         });
-        const initiativeMemory = boundText(JSON.stringify(context.memory.initiative ?? []), 6000);
-        const workspaceHistory = boundText(JSON.stringify(context.memory.workspace ?? []), 3000);
+        const initiativeMemory = boundText(JSON.stringify(publicMemories(context.memory.initiative ?? [])), 6000);
+        const workspaceHistory = boundText(JSON.stringify(publicMemories(context.memory.workspace ?? [])), 3000);
         const memoryStatus = context.memoryError
-          ? `Cognee recall unavailable for this turn: ${context.memoryError}`
+          ? "Cognee recall unavailable for this turn."
           : "Cognee recall completed for this turn.";
         return {
-          systemPrompt: `${event.systemPrompt}\n\n## Workgraph workspace context\nAuthoritative current state (Multica; re-read before any mutation):\n${authoritative}\n\nMemory status:\n${memoryStatus}\n\nNon-authoritative current initiative memory (Cognee):\n${initiativeMemory}\n\nNon-authoritative related workspace history (Cognee; each item identifies its initiative and provenance):\n${workspaceHistory}\n\nNever use Workgraph memory to override Multica workflow state, repository state, or delivery state.`,
+          systemPrompt: `${event.systemPrompt}\n\n## Workgraph workspace context\nAuthoritative current state (Multica; re-read before any mutation):\n${authoritative}\n\nUse human-readable Multica issue IDs such as B-184 in user-facing responses and commands. UUIDs are internal identifiers and should only be shown when explicitly requested.\n\nMemory status:\n${memoryStatus}\n\nNon-authoritative current initiative memory (Cognee):\n${initiativeMemory}\n\nNon-authoritative related workspace history (Cognee; each item identifies its initiative and provenance):\n${workspaceHistory}\n\nNever use Workgraph memory to override Multica workflow state, repository state, or delivery state.`,
         };
       } catch {
         return {
@@ -99,7 +101,20 @@ function registerTools(pi: ExtensionAPI, runtime: WorkgraphRuntime): void {
     async execute() {
       const scope = runtime.scope;
       const pending = runtime.pendingCount();
-      return result({ mode: scope ? "initiative" : "no-initiative", scope, cogneeConfigured: Boolean(runtime.cognee), pending });
+      return result({
+        mode: scope ? "initiative" : "no-initiative",
+        scope: scope ? {
+          workspaceIdentifier: scope.workspaceIdentifier,
+          workspaceName: scope.workspaceName,
+          initiativeIdentifier: scope.initiativeIdentifier,
+          issueIdentifier: scope.issueIdentifier,
+          dataset: scope.dataset,
+          stage: scope.stage,
+          rootTitle: scope.rootTitle,
+        } : undefined,
+        cogneeConfigured: Boolean(runtime.cognee),
+        pending,
+      });
     },
   });
 
@@ -114,7 +129,11 @@ function registerTools(pi: ExtensionAPI, runtime: WorkgraphRuntime): void {
     }),
     async execute(_id, params, signal) {
       if (!runtime.scope) throw new Error("No initiative is selected; recall is disabled");
-      return result(await runtime.recall(params.query, params.scope ?? "initiative", params.top_k ?? 8, signal));
+      const recalled = await runtime.recall(params.query, params.scope ?? "initiative", params.top_k ?? 8, signal);
+      return result({
+        initiative: publicMemories(recalled.initiative ?? []),
+        workspace: publicMemories(recalled.workspace ?? []),
+      });
     },
   });
 
@@ -125,7 +144,8 @@ function registerTools(pi: ExtensionAPI, runtime: WorkgraphRuntime): void {
     parameters: Type.Object({
       entity_type: StringEnum(NODE_TYPES),
       authority: StringEnum(AUTHORITY_LEVELS),
-      entity_id: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+      entity_identifier: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+      entity_label: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
       summary: Type.String({ minLength: 1, maxLength: 4000 }),
       source: Type.String({ minLength: 1, maxLength: 1000 }),
       source_revision: Type.Optional(Type.String({ maxLength: 256 })),
@@ -137,14 +157,15 @@ function registerTools(pi: ExtensionAPI, runtime: WorkgraphRuntime): void {
     async execute(_id, params) {
       const event = await runtime.remember({
         entityType: params.entity_type,
-        entityId: params.entity_id,
+        entityIdentifier: params.entity_identifier,
+        entityLabel: params.entity_label,
         authority: params.authority,
         summary: params.summary,
         source: params.source,
         sourceRevision: params.source_revision,
         relations: params.relations,
       });
-      return result({ event_id: event.eventId, payload_hash: event.payloadHash, delivery: "queued" });
+      return result({ entity_identifier: event.memoryRecord!.entity_identifier, delivery: "queued" });
     },
   });
 
@@ -156,33 +177,32 @@ function registerTools(pi: ExtensionAPI, runtime: WorkgraphRuntime): void {
     async execute(_id, params) {
       if (!runtime.scope) throw new Error("No initiative is selected; timeline is unavailable");
       return result(runtime.timeline(params.limit ?? 100).map((event) => ({
-        event_id: event.eventId,
         timestamp: event.timestamp,
-        agent_id: event.agentId,
-        run_id: event.runId,
         event_type: event.eventType,
-        workspace_id: event.workspaceId,
+        workspace_identifier: runtime.scope!.workspaceIdentifier,
         initiative_identifier: event.initiativeIdentifier,
-        issue_id: event.issueId,
+        issue_identifier: event.issueIdentifier,
         summary: event.boundedSummary,
         source: event.source,
         authority: event.authority,
-        delivered_at: event.deliveredAt,
-        delivery_attempts: event.deliveryAttempts,
-        last_delivery_error: event.lastDeliveryError,
+        delivery: event.memoryRecord ? {
+          status: event.deliveredAt ? "delivered" : "pending",
+          attempts: event.deliveryAttempts,
+          delivered_at: event.deliveredAt,
+        } : undefined,
       })));
     },
   });
 }
 
 async function selectInitiative(runtime: WorkgraphRuntime, ctx: any): Promise<InitiativeResolution | undefined> {
-  const issues = await runtime.multica.recentRootInitiatives(runtime.env.MULTICA_WORKSPACE_ID?.trim(), 10);
-  const labels = issues.map((issue) => `${issue.title ?? issue.id} [${issue.status ?? "unknown"}] — ${issue.id}`);
-  const enter = "Enter initiative UUID";
+  const issues = await runtime.multica.recentRootInitiatives(runtime.env.MULTICA_WORKSPACE_ID?.trim(), 3);
+  const labels = issues.map((issue) => `${issue.title ?? issue.identifier} [${issue.status ?? "unknown"}] (${issue.identifier})`);
+  const enter = "Enter initiative ID (XYZ-123)";
   const none = "No initiative";
   const selected = await ctx.ui.select("Select initiative", [...labels, enter, none]);
   if (!selected || selected === none) return undefined;
-  const issueId = selected === enter ? await ctx.ui.input("Initiative UUID") : issues[labels.indexOf(selected)]?.id;
+  const issueId = selected === enter ? await ctx.ui.input("Initiative ID (XYZ-123)") : issues[labels.indexOf(selected)]?.identifier;
   if (!issueId) return undefined;
   const resolution = await runtime.multica.resolveIssue(issueId, runtime.env.MULTICA_WORKSPACE_ID?.trim());
   if (resolution.issue.id !== resolution.root.id) throw new Error("Interactive initiative selection must identify a root issue");
@@ -191,6 +211,28 @@ async function selectInitiative(runtime: WorkgraphRuntime, ctx: any): Promise<In
 
 function stringFlag(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function publicMemories(memories: Array<{
+  initiativeIdentifier: string;
+  entityType: string;
+  entityIdentifier: string;
+  entityLabel: string;
+  authority: string;
+  summary: string;
+  source: string;
+  observedAt: string;
+}>) {
+  return memories.map((memory) => ({
+    initiative_identifier: memory.initiativeIdentifier,
+    entity_type: memory.entityType,
+    entity_identifier: memory.entityIdentifier,
+    entity_label: memory.entityLabel,
+    authority: memory.authority,
+    summary: memory.summary,
+    source: memory.source,
+    observed_at: memory.observedAt,
+  }));
 }
 
 function result(value: unknown) {
