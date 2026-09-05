@@ -86,8 +86,8 @@ export class CogneeApiClient {
       .replace(/^-+|-+$/g, "")
       .toLowerCase()
       .slice(0, 100) || "workgraph-record";
-    const filename = `${readable}-${idempotencyKey.slice(0, 10)}.json`;
-    form.append("data", new Blob([JSON.stringify(record)], { type: "application/json" }), filename);
+    const filename = `${readable}-${idempotencyKey.slice(0, 10)}.txt`;
+    form.append("data", new Blob([semanticDocument(record)], { type: "text/plain" }), filename);
     form.append("datasetName", dataset);
     for (const nodeSet of record.node_sets) form.append("node_set", nodeSet);
     form.append("custom_prompt", EXTRACTION_PROMPT);
@@ -118,6 +118,38 @@ export class CogneeApiClient {
     const contentType = response.headers.get("content-type") ?? "";
     return contentType.includes("json") ? response.json() : response.text();
   }
+}
+
+function semanticDocument(record: MemoryRecord): string {
+  const nodes = new Map<string, string>([[record.entity_identifier, record.entity_type]]);
+  for (const relation of record.relations) {
+    if (!nodes.has(relation.target)) nodes.set(relation.target, targetType(relation.target, relation.type));
+  }
+  return [
+    "WORKGRAPH_GRAPH_V1",
+    JSON.stringify({
+      nodes: [...nodes].map(([identifier, type]) => ({ identifier, type })),
+      source_label: record.entity_label,
+      summary: record.summary,
+      relations: record.relations.map((relation) => ({ source: record.entity_identifier, ...relation })),
+    }),
+    "WORKGRAPH_RECORD_V1",
+    JSON.stringify(record),
+  ].join("\n");
+}
+
+function targetType(identifier: string, relation: string): string {
+  const prefix = identifier.split(":", 1)[0]?.toLowerCase();
+  const type = [
+    "Initiative", "Issue", "Task", "Agent", "Squad", "Decision", "Constraint",
+    "Risk", "Blocker", "Handoff", "Artifact", "Evidence", "Run", "Outcome", "Conflict",
+  ].find((candidate) => candidate.toLowerCase() === prefix);
+  if (type) return type;
+  if (["assigned_to", "owned_by", "delegated_to"].includes(relation)) return "Agent";
+  if (["supports", "derived_from", "verified_by"].includes(relation)) return "Evidence";
+  if (relation === "blocked_by") return "Blocker";
+  if (relation === "resulted_in") return "Outcome";
+  return "Artifact";
 }
 
 export function createCogneeClientFromEnv(env: NodeJS.ProcessEnv = process.env): CogneeApiClient | undefined {

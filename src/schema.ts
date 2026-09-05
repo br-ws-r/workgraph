@@ -2,12 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 
 export const SCHEMA_VERSION = "3.0.0" as const;
-export const EXTRACTION_PROMPT_VERSION = "2.0.0" as const;
-export const EXTRACTION_PROMPT = `Extract only the bounded Workgraph entity and relation types in schema ${SCHEMA_VERSION}.
-Use entity_label, bounded summaries, and *_identifier fields for concise human-readable node names.
-Treat *_id UUIDs, source_revision, hashes, timestamps, and source URLs as opaque provenance attributes; never use them as node display names.
-Preserve stable semantic identifiers, source provenance, observation time, and authority exactly as supplied.
-Do not invent current state, identifiers, relations, or authority. Treat remembered summaries as historical context.
+export const EXTRACTION_PROMPT_VERSION = "3.0.0" as const;
+export const EXTRACTION_PROMPT = `Extract Workgraph schema ${SCHEMA_VERSION} using only the nodes and relations declared in the WORKGRAPH_GRAPH_V1 section.
+Use each declared node identifier exactly as its node name, including its type prefix. Never shorten or normalize it to a shared label.
+Use each declared relation source, type, and target exactly. Do not infer additional domain nodes or relations.
+WORKGRAPH_RECORD_V1 contains the exact source record for recall and provenance. Do not extract additional nodes or relations from that section.
+Treat summaries as historical context and never infer current state from them.
 Entity types: Initiative, Issue, Task, Agent, Squad, Decision, Constraint, Risk, Blocker, Handoff, Artifact, Evidence, Run, Outcome, Conflict.
 Relation types: root_of, child_of, part_of, assigned_to, owned_by, delegated_to, blocked_by, depends_on, produced, supports, contradicts, derived_from, about, verified_by, resulted_in, observed_in, related_to.`;
 
@@ -37,6 +37,7 @@ export const NodeTypeSchema = z.enum(NODE_TYPES);
 export const EdgeTypeSchema = z.enum(EDGE_TYPES);
 export const AuthoritySchema = z.enum(AUTHORITY_LEVELS);
 export const EventTypeSchema = z.enum(EVENT_TYPES);
+const ExtractionPromptVersionSchema = z.enum(["2.0.0", EXTRACTION_PROMPT_VERSION]);
 
 const UuidSchema = z.string().uuid();
 const StructuredIdentifierSchema = z.string().trim().min(1).max(256);
@@ -92,7 +93,7 @@ export const RelationSchema = z.object({
 
 export const MemoryRecordSchema = z.object({
   schema_version: z.literal(SCHEMA_VERSION),
-  extraction_prompt_version: z.literal(EXTRACTION_PROMPT_VERSION),
+  extraction_prompt_version: ExtractionPromptVersionSchema,
   workspace_id: UuidSchema,
   workspace_identifier: ReadableIdentifierSchema,
   workspace_name: StructuredIdentifierSchema.optional(),
@@ -205,7 +206,7 @@ export function createEvent(input: WorkgraphEventInput): WorkgraphEvent {
   ReadableIdentifierSchema.parse(input.issueIdentifier);
   z.array(NodeSetSchema).min(3).max(6).parse(input.nodeSets);
   z.literal(SCHEMA_VERSION).parse(input.schemaVersion);
-  z.literal(EXTRACTION_PROMPT_VERSION).parse(input.extractionPromptVersion);
+  ExtractionPromptVersionSchema.parse(input.extractionPromptVersion);
   if (input.memoryRecord) {
     const record = MemoryRecordSchema.parse(input.memoryRecord);
     if (record.workspace_id !== input.workspaceId

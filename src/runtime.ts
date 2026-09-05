@@ -284,19 +284,15 @@ export class WorkgraphRuntime {
     const operation = this.#reconciliations.then(() => this.reconcileActivityNow());
     this.#reconciliations = operation.catch(() => undefined);
     const { resolution } = await operation;
-    const scope = this.#scope!;
     const observedAt = new Date().toISOString();
-    return this.rememberVerified({
-      entityType: "Outcome",
-      authority: "observed",
-      summary: `Work on Multica issue ${resolution.issue.identifier} settled with authoritative status ${resolution.issue.status}.`,
-      source: this.issueSource(),
-      entityIdentifier: semanticRecordIdentifier("outcome", scope.issueIdentifier, observedAt, scope.runId),
-      entityLabel: `${scope.issueIdentifier} run outcome`,
-      relations: [{ type: "observed_in", target: `issue:${scope.issueIdentifier}` }],
-      eventType: "run_settled",
-      observedAt,
-    }, resolution);
+    return this.append(
+      "run_settled",
+      `Work on Multica issue ${resolution.issue.identifier} settled with authoritative status ${resolution.issue.status}.`,
+      this.issueSource(),
+      "observed",
+      undefined,
+      { timestamp: observedAt },
+    )!;
   }
 
   async compact(): Promise<TimelineEntry> {
@@ -666,7 +662,9 @@ function normalizeMemories(entries: CogneeRecallEntry[]): RecalledMemory[] {
 }
 
 function parseMemoryRecord(text: string): MemoryRecord | undefined {
-  const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  const marker = "WORKGRAPH_RECORD_V1";
+  const payload = text.includes(marker) ? text.slice(text.indexOf(marker) + marker.length) : text;
+  const trimmed = payload.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   try {
     const parsed = MemoryRecordSchema.safeParse(JSON.parse(trimmed));
     return parsed.success ? parsed.data : undefined;

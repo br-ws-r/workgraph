@@ -57,7 +57,7 @@ Pi lifecycle hooks remain essential behavior:
 | --- | --- |
 | `session_start` | Resolve and lock the workspace and root initiative |
 | `before_agent_start` | Refresh Multica and inject two-lane Cognee context |
-| `agent_settled` | Reconcile new Multica activity, then record a bounded run outcome |
+| `agent_settled` | Reconcile new Multica activity, then record run status only in the exact local timeline |
 | `session_before_compact` | Reconcile new Multica activity, then record a compaction anchor |
 | `session_shutdown` | Reconcile activity, drain bounded delivery batches, and close SQLite |
 
@@ -224,10 +224,10 @@ ASTs, transcript turns, or log lines.
 
 ### Guided extraction first
 
-Pass a versioned generic `custom_prompt` and server-derived NodeSets through
-Cognee Remember so extraction preserves canonical concepts, relation labels,
-stable IDs, and provenance. Keep the prompt and representative fixtures in
-this repository.
+Pass a versioned `WORKGRAPH_GRAPH_V1` projection, `custom_prompt`, and
+server-derived NodeSets through Cognee Remember so extraction uses exact node
+identifiers and relation labels. Keep the complete validated record after a
+`WORKGRAPH_RECORD_V1` marker for recall and provenance.
 
 Fixtures must include materially different work domains, such as a software
 release, incident response, marketing campaign, hiring process, and procurement
@@ -244,7 +244,7 @@ into Cognee.
 Pi lifecycle automatically records only:
 
 - verified initiative selection and run start in the exact local timeline;
-- a bounded final run outcome after a successful Multica refresh;
+- a bounded final run status in the exact local timeline after a successful Multica refresh;
 - a bounded compaction anchor; and
 - delivery success or failure metadata.
 
@@ -354,7 +354,7 @@ closed; concurrent outbox tests pass.
 
 ### Stage 2: Cognee concepts
 
-- Send NodeSets and the versioned extraction prompt through Remember.
+- Send NodeSets, the versioned graph projection, and its extraction prompt through Remember.
 - Add a tested Recall API compatibility layer.
 - Implement initiative and workspace recall primitives with normalized
   provenance.

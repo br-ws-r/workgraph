@@ -121,6 +121,8 @@ describe("workspace memory schema", () => {
       expect(MemoryRecordSchema.safeParse(invalid).success, field).toBe(false);
     }
     expect(() => MemoryRecordSchema.parse(record({ schema_version: "future" }))).toThrow();
+    expect(MemoryRecordSchema.parse(record({ extraction_prompt_version: "2.0.0" }))).toBeTruthy();
+    expect(() => MemoryRecordSchema.parse(record({ extraction_prompt_version: "1.0.0" }))).toThrow();
     expect(() => MemoryRecordSchema.parse(record({ node_sets: [
       "initiative:B-184", "type:decision", "authority:confirmed", "repo:unverified",
     ] }))).toThrow("server-derived scope");

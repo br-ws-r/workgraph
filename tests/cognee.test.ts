@@ -53,7 +53,8 @@ describe("Cognee remote transport", () => {
       workspace_id: workspace, workspace_identifier: "brwsr", workspace_name: "BRWSR",
       initiative_identifier: "B-184", issue_id: issue, issue_identifier: "B-185",
       entity_type: "Decision", authority: "confirmed", initiative_id: initiative,
-      entity_identifier: "decision:test", entity_label: "Test decision", summary: "Scoped.", relations: [],
+      entity_identifier: "decision:test", entity_label: "Test decision", summary: "Scoped.",
+      relations: [{ type: "about", target: "issue:B-185" }],
       node_sets: ["initiative:B-184", "type:decision", "authority:confirmed"],
       source: "multica://issues/B-185", observed_at: "2026-08-30T09:00:00.000Z",
     }, dataset, "payload-hash");
@@ -69,7 +70,17 @@ describe("Cognee remote transport", () => {
       "initiative:B-184", "type:decision", "authority:confirmed",
     ]);
     expect((init.body as FormData).get("custom_prompt")).toBe(EXTRACTION_PROMPT);
-    expect(((init.body as FormData).get("data") as File).name).toBe("test-decision-payload-ha.json");
+    const file = (init.body as FormData).get("data") as File;
+    expect(file.name).toBe("test-decision-payload-ha.txt");
+    const document = await file.text();
+    expect(document).toContain('{"identifier":"decision:test","type":"Decision"}');
+    expect(document).toContain('{"identifier":"issue:B-185","type":"Issue"}');
+    expect(document).toContain('{"source":"decision:test","type":"about","target":"issue:B-185"}');
+    expect(document).toContain("WORKGRAPH_RECORD_V1\n{");
+    expect(JSON.parse(document.split("WORKGRAPH_RECORD_V1\n")[1])).toMatchObject({
+      entity_identifier: "decision:test",
+      issue_identifier: "B-185",
+    });
   });
 
   it("supports unauthenticated loopback self-hosting", async () => {

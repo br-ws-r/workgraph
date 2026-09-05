@@ -88,6 +88,14 @@ function recallEntry(record: MemoryRecord): CogneeRecallEntry {
   };
 }
 
+function projectedRecallEntry(record: MemoryRecord): CogneeRecallEntry {
+  return {
+    source: "graph", kind: "chunk", searchType: "CHUNKS",
+    text: `WORKGRAPH_GRAPH_V1\nNode: ${record.entity_identifier} | Type: ${record.entity_type}\nWORKGRAPH_RECORD_V1\n${JSON.stringify(record)}`,
+    metadata: {},
+  };
+}
+
 describe("Workgraph workspace runtime", () => {
   it("keeps missing initiative fail-closed", async () => {
     const instance = runtime();
@@ -199,6 +207,26 @@ describe("Workgraph workspace runtime", () => {
     });
     expect(recall).toHaveBeenNthCalledWith(2, "related decision", "workgraph-workspace-brwsr", {
       topK: 20, signal: undefined,
+    });
+    instance.outbox.close();
+  });
+
+  it("recalls records from the explicit graph projection document", async () => {
+    const resolved = resolution();
+    const projected = memory("B-184", initiative);
+    const multica = new MulticaReader({ run: vi.fn() });
+    multica.resolveIssue = vi.fn(async () => resolved);
+    const instance = runtime({
+      cognee: {
+        recall: vi.fn(async () => [projectedRecallEntry(projected)]),
+        remember: vi.fn(),
+      } as unknown as CogneeApiClient,
+      multica,
+    });
+    instance.lockInitiative(resolved);
+
+    await expect(instance.recall("decision")).resolves.toMatchObject({
+      initiative: [{ entityIdentifier: "decision:B-184" }],
     });
     instance.outbox.close();
   });
@@ -367,6 +395,27 @@ describe("Workgraph workspace runtime", () => {
       entity_label: "B-185 status changed",
       observed_at: second.created_at,
     });
+    instance.outbox.close();
+  });
+
+  it("keeps a generic settled status in the exact timeline without semantic delivery", async () => {
+    const resolved = resolution();
+    const multica = new MulticaReader({ run: vi.fn() });
+    multica.resolveIssue = vi.fn(async () => resolved);
+    multica.issueActivities = vi.fn(async () => ({ activities: [], truncated: false }));
+    const remember = vi.fn();
+    const instance = runtime({ multica, cognee: { recall: vi.fn(), remember } as unknown as CogneeApiClient });
+    instance.lockInitiative(resolved);
+
+    const settled = await instance.settle();
+    await instance.flush();
+
+    expect(settled).toMatchObject({
+      eventType: "run_settled",
+      boundedSummary: "Work on Multica issue B-185 settled with authoritative status in_progress.",
+      memoryRecord: undefined,
+    });
+    expect(remember).not.toHaveBeenCalled();
     instance.outbox.close();
   });
 
