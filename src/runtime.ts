@@ -117,7 +117,8 @@ export class WorkgraphRuntime {
 
   lockInitiative(resolution: InitiativeResolution): WorkgraphScope {
     if (this.#scope) throw new Error("Workgraph scope is immutable for the lifetime of this Pi process");
-    const workspaceId = requiredValue(this.env.MULTICA_WORKSPACE_ID, "MULTICA_WORKSPACE_ID").toLowerCase();
+    const workspaceId = this.env.MULTICA_WORKSPACE_ID?.trim().toLowerCase()
+      || resolution.workspace.id.toLowerCase();
     if (resolution.workspace.id.toLowerCase() !== workspaceId
       || resolution.issue.workspace_id.toLowerCase() !== workspaceId
       || resolution.root.workspace_id.toLowerCase() !== workspaceId) {

@@ -196,7 +196,9 @@ function registerTools(pi: ExtensionAPI, runtime: WorkgraphRuntime): void {
 }
 
 async function selectInitiative(runtime: WorkgraphRuntime, ctx: any): Promise<InitiativeResolution | undefined> {
-  const issues = await runtime.multica.recentRootInitiatives(runtime.env.MULTICA_WORKSPACE_ID?.trim(), 3);
+  const workspaceId = runtime.env.MULTICA_WORKSPACE_ID?.trim()
+    || (await runtime.multica.workspace()).id;
+  const issues = await runtime.multica.recentRootInitiatives(workspaceId, 3);
   const labels = issues.map((issue) => `${issue.title ?? issue.identifier} [${issue.status ?? "unknown"}] (${issue.identifier})`);
   const enter = "Enter initiative ID (XYZ-123)";
   const none = "No initiative";
@@ -204,7 +206,7 @@ async function selectInitiative(runtime: WorkgraphRuntime, ctx: any): Promise<In
   if (!selected || selected === none) return undefined;
   const issueId = selected === enter ? await ctx.ui.input("Initiative ID (XYZ-123)") : issues[labels.indexOf(selected)]?.identifier;
   if (!issueId) return undefined;
-  const resolution = await runtime.multica.resolveIssue(issueId, runtime.env.MULTICA_WORKSPACE_ID?.trim());
+  const resolution = await runtime.multica.resolveIssue(issueId, workspaceId);
   if (resolution.issue.id !== resolution.root.id) throw new Error("Interactive initiative selection must identify a root issue");
   return resolution;
 }

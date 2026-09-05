@@ -64,7 +64,10 @@ function fakeRuntime() {
       dataset: "workgraph-workspace-brwsr", issueId, issueIdentifier: "B-185", rootTitle: "Initiative",
     },
     cognee: {},
-    multica: { resolveIssue: vi.fn(), resolveTask: vi.fn(), recentRootInitiatives: vi.fn() },
+    multica: {
+      workspace: vi.fn(async () => resolved.workspace),
+      resolveIssue: vi.fn(), resolveTask: vi.fn(), recentRootInitiatives: vi.fn(),
+    },
     lockInitiative: vi.fn(),
     context: vi.fn(async () => ({
       resolution: resolved,
@@ -194,6 +197,7 @@ describe("Workgraph Pi extension", () => {
 
   it("offers three recent initiatives by readable ID and accepts an ID manually", async () => {
     const runtime = fakeRuntime();
+    delete runtime.env.MULTICA_WORKSPACE_ID;
     const roots = ["B-201", "B-200", "B-184"].map((identifier, index) => ({
       ...resolution().root,
       id: `00000000-0000-4000-8000-${String(201 - index).padStart(12, "0")}`,
@@ -211,6 +215,7 @@ describe("Workgraph Pi extension", () => {
 
     await harness.handlers.get("session_start")!({}, ctx);
 
+    expect(runtime.multica.workspace).toHaveBeenCalledOnce();
     expect(runtime.multica.recentRootInitiatives).toHaveBeenCalledWith(workspace, 3);
     expect(ui.select).toHaveBeenCalledWith("Select initiative", [
       "Initiative B-201 [in_progress] (B-201)",

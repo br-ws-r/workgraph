@@ -119,10 +119,16 @@ export class MulticaReader {
   }
 
   async workspace(workspaceId?: string): Promise<MulticaWorkspace> {
-    const expectedWorkspace = requiredUuid(workspaceId, "Multica workspace");
-    const result = await this.#run(this.#binary, ["workspace", "get", expectedWorkspace, "--output", "json"]);
+    const expectedWorkspace = workspaceId?.trim()
+      ? requiredUuid(workspaceId, "Multica workspace")
+      : undefined;
+    const result = await this.#run(this.#binary, [
+      "workspace", "get", ...(expectedWorkspace ? [expectedWorkspace] : []), "--output", "json",
+    ]);
     const workspace = MulticaWorkspaceSchema.parse(result);
-    if (workspace.id.toLowerCase() !== expectedWorkspace) throw new Error("Multica returned a different workspace ID");
+    if (expectedWorkspace && workspace.id.toLowerCase() !== expectedWorkspace) {
+      throw new Error("Multica returned a different workspace ID");
+    }
     return workspace;
   }
 
@@ -229,13 +235,13 @@ export async function resolveFromEnvironment(
   env: NodeJS.ProcessEnv,
   explicitInitiative?: string,
 ): Promise<InitiativeResolution | undefined> {
-  const workspaceId = requiredUuid(env.MULTICA_WORKSPACE_ID, "MULTICA_WORKSPACE_ID");
   const taskId = env.MULTICA_TASK_ID?.trim();
   const agentId = env.MULTICA_AGENT_ID?.trim();
 
   if (taskId || agentId) {
     if (!taskId || !agentId) throw new Error("MULTICA_TASK_ID and MULTICA_AGENT_ID must be provided together");
     if (explicitInitiative) throw new Error("--initiative cannot override a managed Multica task");
+    const workspaceId = requiredUuid(env.MULTICA_WORKSPACE_ID, "MULTICA_WORKSPACE_ID");
     const resolved = await reader.resolveTask(taskId, agentId, workspaceId);
     const issueId = env.MULTICA_ISSUE_ID?.trim();
     if (issueId && requiredUuid(issueId, "MULTICA_ISSUE_ID") !== resolved.issue.id.toLowerCase()) {
@@ -244,12 +250,16 @@ export async function resolveFromEnvironment(
     return resolved;
   }
 
+  const issueId = env.MULTICA_ISSUE_ID?.trim();
+  if (!explicitInitiative && !issueId) return undefined;
+  const workspaceId = env.MULTICA_WORKSPACE_ID?.trim()
+    ? requiredUuid(env.MULTICA_WORKSPACE_ID, "MULTICA_WORKSPACE_ID")
+    : (await reader.workspace()).id.toLowerCase();
   if (explicitInitiative) {
     const resolved = await reader.resolveIssue(explicitInitiative, workspaceId);
     if (resolved.issue.id !== resolved.root.id) throw new Error("--initiative must identify a root Multica issue");
     return resolved;
   }
-  const issueId = env.MULTICA_ISSUE_ID?.trim();
   if (issueId) return reader.resolveIssue(issueId, workspaceId);
   return undefined;
 }
