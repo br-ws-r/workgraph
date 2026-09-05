@@ -154,7 +154,8 @@ Ask Pi to call `initiative_memory_status`. A working setup reports:
 - `mode: "initiative"`;
 - the expected readable workspace, initiative and issue identifiers, plus the
   `workgraph-workspace-...` dataset;
-- `cogneeConfigured: true`.
+- `cogneeConfigured: true`;
+- `pending_deliveries: 0` when all semantic records have reached Cognee.
 
 You can then ask Pi to remember a sourced decision and recall it later.
 `initiative_timeline` shows the exact local event and whether synchronous Cognee
@@ -178,6 +179,14 @@ MULTICA_RUN_ID=<run-uuid>
 Workgraph runs `multica agent tasks <agent-id>` to find the exact task, reads its
 issue, and follows `parent_issue_id` to the root. Start one new Pi process per
 Multica run; initiative scope is intentionally immutable in-process.
+
+Headless workspace chats do not have an issue or initiative assignment. In that
+case Workgraph performs one bounded, read-only recall from the verified
+workspace dataset before the first agent run in a fresh Pi session. Resumed
+sessions do not recall automatically on every message; the same workspace-only
+recall remains available on demand when prior context could materially help.
+Initiative writes remain disabled, and Workgraph does not guess an initiative
+from chat text or recent tasks.
 
 `MULTICA_ISSUE_ID` is also supported for an explicitly issue-scoped launch.
 `MULTICA_BIN` can point to a non-default Multica CLI binary.
@@ -246,8 +255,8 @@ Schema v3 starts with `workgraph-workspace-v3.db` and the readable
 
 | Tool | Purpose |
 | --- | --- |
-| `initiative_memory_status` | Show scope, backend, and pending writes |
-| `initiative_memory_recall` | Search the current initiative or bounded related workspace history |
+| `initiative_memory_status` | Show scope, backend, and pending semantic deliveries |
+| `initiative_memory_recall` | Search the current initiative or bounded related workspace history; workspace-only in unscoped chats |
 | `initiative_memory_remember` | Append one bounded, sourced memory record |
 | `initiative_timeline` | Read the exact ordered SQLite event timeline |
 
@@ -256,7 +265,15 @@ Schema v3 starts with `workgraph-workspace-v3.db` and the readable
 the same decision, blocker, or artifact; otherwise Workgraph creates one from
 the issue identifier, observation time, and a short hash. Full UUIDs are rejected
 from semantic identifiers, relation targets, labels, datasets, and NodeSets.
+Use canonical relation targets such as `issue:B-184`; bare Multica issue IDs are
+normalized to that form automatically.
 None of the tools accepts a dataset argument.
+
+`pending_deliveries` counts only semantic records awaiting Cognee delivery.
+Local timeline events intentionally have no delivery timestamp. For direct
+SQLite diagnostics, the equivalent predicate is
+`memory_record_json IS NOT NULL AND delivered_at IS NULL`; testing only
+`delivered_at IS NULL` incorrectly includes local-only events.
 
 ## Runtime configuration reference
 

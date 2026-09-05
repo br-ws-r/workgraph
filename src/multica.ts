@@ -134,6 +134,16 @@ export class MulticaReader {
     return workspace;
   }
 
+  async isCurrentChat(): Promise<boolean> {
+    try {
+      const result = await this.#run(this.#binary, ["chat", "history", "--limit", "1", "--output", "json"]);
+      return Array.isArray(result) || (isRecord(result)
+        && (Array.isArray(result.messages) || Array.isArray(result.threads)));
+    } catch {
+      return false;
+    }
+  }
+
   async project(projectId: string, workspaceId?: string): Promise<MulticaProject> {
     const expectedWorkspace = requiredUuid(workspaceId, "Multica workspace");
     const expectedProject = requiredUuid(projectId, "Multica project");

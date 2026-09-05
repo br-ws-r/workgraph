@@ -121,6 +121,16 @@ describe("Multica v0.4.35 initiative resolution", () => {
     }
   });
 
+  it("detects only a daemon-verified current chat context", async () => {
+    const chatRun = vi.fn(async () => ({ messages: [] }));
+    const chatReader = new MulticaReader({ run: chatRun });
+    await expect(chatReader.isCurrentChat()).resolves.toBe(true);
+    expect(chatRun).toHaveBeenCalledWith("multica", ["chat", "history", "--limit", "1", "--output", "json"]);
+
+    const issueReader = new MulticaReader({ run: async () => { throw new Error("no chat task in context"); } });
+    await expect(issueReader.isCurrentChat()).resolves.toBe(false);
+  });
+
   it("requires a workspace only for managed resolution", async () => {
     const reader = new MulticaReader({ run: vi.fn() });
     await expect(resolveFromEnvironment(reader, {})).resolves.toBeUndefined();
