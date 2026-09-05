@@ -108,10 +108,12 @@ and must not be treated as authorization boundaries.
 
 ## Extraction and timeline
 
-The versioned generic extraction prompt asks Cognee to preserve canonical
-concepts, bounded relations, stable IDs, authority, and provenance without
-inventing current state. The prompt is guidance for a non-deterministic semantic
-projection, not a claim that an RDF/OWL ontology is loaded.
+The versioned extraction document presents exact node identifiers and relations
+in a small `WORKGRAPH_GRAPH_V1` section. The complete validated record follows a
+`WORKGRAPH_RECORD_V1` marker so Recall can recover provenance without asking the
+graph extractor to reinterpret its envelope fields. The prompt remains guidance
+for a non-deterministic semantic projection, not a custom graph model or a claim
+that an RDF/OWL ontology is loaded.
 
 SQLite is the exact append-only event and delivery source. Chronology and
 delivery status come from the local timeline, never temporal model extraction.

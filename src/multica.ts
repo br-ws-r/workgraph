@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { z } from "zod";
 
 const execFileAsync = promisify(execFile);
+const MULTICA_JSON_MAX_BUFFER = 64 * 1024 * 1024;
 const UuidSchema = z.string().uuid();
 const IssueReferenceSchema = z.string().trim().min(1).max(128).regex(/^[A-Za-z][A-Za-z0-9._-]*-\d+$/);
 
@@ -86,7 +87,8 @@ export class MulticaReader {
     this.#maxDepth = options.maxDepth ?? 32;
     this.#run = options.run ?? (async (command, args) => {
       const { stdout } = await execFileAsync(command, args, {
-        encoding: "utf8", timeout: 10_000, maxBuffer: 5_000_000,
+        // `agent tasks` has no task filter and can include years of agent history.
+        encoding: "utf8", timeout: 10_000, maxBuffer: MULTICA_JSON_MAX_BUFFER,
       });
       return JSON.parse(stdout);
     });
@@ -94,7 +96,7 @@ export class MulticaReader {
       ? async (command, args) => ({ value: await options.run!(command, args), truncated: false })
       : async (command, args) => {
           const { stdout, stderr } = await execFileAsync(command, args, {
-            encoding: "utf8", timeout: 10_000, maxBuffer: 5_000_000,
+            encoding: "utf8", timeout: 10_000, maxBuffer: MULTICA_JSON_MAX_BUFFER,
           });
           return { value: JSON.parse(stdout), truncated: /timeline truncated/i.test(stderr) };
         });

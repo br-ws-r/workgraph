@@ -299,6 +299,10 @@ timestamps, and bounded errors are mutable metadata on those events. Workgraph
 sends a payload hash in the `Idempotency-Key` header, but Cognee does not
 currently document server-side support for that header. Delivery is therefore
 at least once after an ambiguous timeout and duplicate extraction is possible.
+Each new delivery contains a small `WORKGRAPH_GRAPH_V1` projection with exact
+node identifiers and relations, followed by the complete validated
+`WORKGRAPH_RECORD_V1` used for recall and provenance. Cognee still applies its
+default graph extraction; no custom graph model is installed.
 
 ## Security and privacy
 
@@ -330,7 +334,7 @@ extraction; Workgraph does not install a custom graph model.
 | --- | --- |
 | `session_start` | Resolve and lock one verified initiative |
 | `before_agent_start` | Refresh, recall, and inject separated context |
-| `agent_settled` | Reconcile new Multica issue activity, then record the run/issue state |
+| `agent_settled` | Reconcile new Multica issue activity, then record the run/issue state only in the exact local timeline |
 | `session_before_compact` | Reconcile new activity, then record a run/status anchor |
 | `session_shutdown` | Reconcile new activity, flush pending delivery, and close SQLite |
 
