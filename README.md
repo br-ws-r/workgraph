@@ -181,10 +181,11 @@ issue, and follows `parent_issue_id` to the root. Start one new Pi process per
 Multica run; initiative scope is intentionally immutable in-process.
 
 Headless workspace chats do not have an issue or initiative assignment. In that
-case Workgraph performs bounded, read-only recall from the verified workspace
-dataset and injects it as non-authoritative history. Initiative writes remain
-disabled, and Workgraph does not guess an initiative from chat text or recent
-tasks.
+case Workgraph makes bounded, read-only recall from the verified workspace
+dataset available on demand. The agent calls it only when prior context could
+materially help; ordinary chat turns do not query Cognee. Initiative writes
+remain disabled, and Workgraph does not guess an initiative from chat text or
+recent tasks.
 
 `MULTICA_ISSUE_ID` is also supported for an explicitly issue-scoped launch.
 `MULTICA_BIN` can point to a non-default Multica CLI binary.

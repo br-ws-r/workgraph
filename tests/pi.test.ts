@@ -177,7 +177,7 @@ describe("Workgraph Pi extension", () => {
     expect(result.systemPrompt).toContain("Cognee recall unavailable");
   });
 
-  it("injects read-only workspace memory into an unscoped chat", async () => {
+  it("offers read-only workspace memory on demand in a verified chat", async () => {
     const runtime = fakeRuntime();
     (runtime as any).scope = undefined;
     runtime.env.MULTICA_TASK_ID = "00000000-0000-4000-8000-000000000003";
@@ -196,9 +196,10 @@ describe("Workgraph Pi extension", () => {
       "call-workspace", { query: "OMP", top_k: 4 }, ctx.signal, undefined, ctx,
     );
 
-    expect(runtime.workspaceContext).toHaveBeenNthCalledWith(1, "What is the OMP status?", 8, ctx.signal);
-    expect(runtime.workspaceContext).toHaveBeenNthCalledWith(2, "OMP", 4, ctx.signal);
-    expect(prompt.systemPrompt).toContain("Workspace decision");
+    expect(runtime.workspaceContext).toHaveBeenCalledOnce();
+    expect(runtime.workspaceContext).toHaveBeenCalledWith("OMP", 4, ctx.signal);
+    expect(prompt.systemPrompt).toContain("available on demand");
+    expect(prompt.systemPrompt).not.toContain("Workspace decision");
     expect(prompt.systemPrompt).toContain("No initiative is selected");
     expect(recalled.details.value.workspace).toHaveLength(1);
     expect(runtime.remember).not.toHaveBeenCalled();

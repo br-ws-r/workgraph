@@ -51,13 +51,8 @@ export function createWorkgraphExtension(options: WorkgraphPiOptions = {}) {
       try {
         if (!runtime.scope) {
           if (!workspaceChat) return undefined;
-          const context = await runtime.workspaceContext(event.prompt, 8, ctx.signal);
-          const workspaceMemory = boundText(JSON.stringify(publicMemories(context.memory)), 3000);
-          const memoryStatus = context.memoryError
-            ? "Cognee workspace recall unavailable for this turn."
-            : "Cognee workspace recall completed for this turn.";
           return {
-            systemPrompt: `${event.systemPrompt}\n\n## Workgraph workspace context\nAuthoritative workspace identity (Multica):\n${JSON.stringify({ workspace_identifier: context.workspace.slug, workspace_name: context.workspace.name })}\n\nMemory status:\n${memoryStatus}\n\nNon-authoritative related workspace memory (Cognee):\n${workspaceMemory}\n\nNo initiative is selected. Do not write Workgraph memory or infer current workflow state from workspace memory.`,
+            systemPrompt: `${event.systemPrompt}\n\n## Workgraph workspace chat\nNo initiative is selected. Read-only workspace memory is available on demand through initiative_memory_recall with workspace scope. Use it only when prior workspace context could materially help. Do not write Workgraph memory or infer current workflow state from recalled memory.`,
           };
         }
         const context = await runtime.context(event.prompt, ctx.signal);
@@ -136,7 +131,7 @@ function registerTools(pi: ExtensionAPI, runtime: WorkgraphRuntime, isWorkspaceC
   pi.registerTool({
     name: "initiative_memory_recall",
     label: "Recall Initiative Memory",
-    description: "Recall the current initiative or bounded related history within the locked workspace dataset.",
+    description: "Recall the current initiative or bounded related history; workspace-only recall is available on demand in verified chats.",
     parameters: Type.Object({
       query: Type.String({ minLength: 1, maxLength: 2000 }),
       scope: Type.Optional(StringEnum(["initiative", "workspace", "both"] as const)),
