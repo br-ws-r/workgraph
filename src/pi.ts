@@ -199,7 +199,18 @@ async function selectInitiative(runtime: WorkgraphRuntime, ctx: any): Promise<In
   const workspaceId = runtime.env.MULTICA_WORKSPACE_ID?.trim()
     || (await runtime.multica.workspace()).id;
   const issues = await runtime.multica.recentRootInitiatives(workspaceId, 3);
-  const labels = issues.map((issue) => `${issue.title ?? issue.identifier} [${issue.status ?? "unknown"}] (${issue.identifier})`);
+  const projectLabels = new Map<string, string>();
+  await Promise.all([...new Set(issues.flatMap((issue) => issue.project_id ? [issue.project_id] : []))]
+    .map(async (projectId) => {
+      try {
+        const label = selectorProjectLabel((await runtime.multica.project(projectId, workspaceId)).title);
+        if (label) projectLabels.set(projectId, label);
+      } catch { /* project context is optional in the selector */ }
+    }));
+  const labels = issues.map((issue) => {
+    const project = issue.project_id ? projectLabels.get(issue.project_id) : undefined;
+    return `${issue.identifier}${project ? ` [${project}]` : ""} - ${issue.title ?? issue.identifier} [${issue.status ?? "unknown"}]`;
+  });
   const enter = "Enter initiative ID (XYZ-123)";
   const none = "No initiative";
   const selected = await ctx.ui.select("Select initiative", [...labels, enter, none]);
@@ -209,6 +220,13 @@ async function selectInitiative(runtime: WorkgraphRuntime, ctx: any): Promise<In
   const resolution = await runtime.multica.resolveIssue(issueId, workspaceId);
   if (resolution.issue.id !== resolution.root.id) throw new Error("Interactive initiative selection must identify a root issue");
   return resolution;
+}
+
+function selectorProjectLabel(title: string): string {
+  return title.normalize("NFKD")
+    .replace(/[^A-Za-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
 }
 
 function stringFlag(value: unknown): string | undefined {
