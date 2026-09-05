@@ -21,6 +21,13 @@ function resolution() {
       status: "in_progress", status_category: "in_progress", parent_issue_id: null,
       project_id: null, stage: null,
     },
+    workspace: { id: workspace, name: "BRWSR", slug: "brwsr", issue_prefix: "B" },
+    parent: {
+      id: initiative, workspace_id: workspace, identifier: "B-184", title: "Initiative",
+      status: "in_progress", status_category: "in_progress", parent_issue_id: null,
+      project_id: null, stage: null,
+    },
+    project: undefined,
     chain: [issueId, initiative],
   };
 }
@@ -52,8 +59,9 @@ function fakeRuntime() {
   const runtime = {
     env: { MULTICA_WORKSPACE_ID: workspace },
     scope: {
-      workspaceId: workspace, initiativeId: initiative, initiativeIdentifier: "B-184",
-      dataset: `workgraph-workspace-${workspace}`, issueId, rootTitle: "Initiative",
+      workspaceId: workspace, workspaceIdentifier: "brwsr", workspaceName: "BRWSR",
+      initiativeId: initiative, initiativeIdentifier: "B-184",
+      dataset: "workgraph-workspace-brwsr", issueId, issueIdentifier: "B-185", rootTitle: "Initiative",
     },
     cognee: {},
     multica: { resolveIssue: vi.fn(), resolveTask: vi.fn(), recentRootInitiatives: vi.fn() },
@@ -63,19 +71,24 @@ function fakeRuntime() {
       memory: {
         initiative: [{
           workspaceId: workspace, initiativeId: initiative, initiativeIdentifier: "B-184", entityType: "Decision",
-          entityId: "decision:1", authority: "confirmed", summary: "Current decision.",
+          entityIdentifier: "decision:1", entityLabel: "Current decision", authority: "confirmed", summary: "Current decision.",
           source: "test://current", observedAt: "2026-09-04T10:00:00.000Z",
         }],
         workspace: [{
           workspaceId: workspace, initiativeId: "00000000-0000-4000-8000-000000000099",
-          initiativeIdentifier: "B-100", entityType: "Evidence", entityId: "evidence:1",
+          initiativeIdentifier: "B-100", entityType: "Evidence",
+          entityIdentifier: "evidence:1", entityLabel: "Related evidence",
           authority: "observed", summary: "Related evidence.", source: "test://history",
           observedAt: "2026-08-01T10:00:00.000Z",
         }],
       },
     })),
     recall: vi.fn(async () => ({ initiative: [] })),
-    remember: vi.fn(async () => ({ eventId: "event-1", payloadHash: "hash-1" })),
+    remember: vi.fn(async () => ({
+      eventId: "event-1", payloadHash: "hash-1",
+      memoryRecord: { entity_identifier: "decision:workspace-memory" },
+    })),
+    reconcileActivity: vi.fn(async () => 0),
     settle: vi.fn(async () => undefined),
     compact: vi.fn(async () => undefined),
     pendingCount: vi.fn(() => 2),
@@ -114,9 +127,14 @@ describe("Workgraph Pi extension", () => {
     expect(runtime.context).toHaveBeenCalledWith("What should I do?", ctx.signal);
     expect(result.systemPrompt).toContain("Base prompt");
     expect(result.systemPrompt).toContain("Authoritative current state");
+    expect(result.systemPrompt).toContain('"issue_identifier":"B-185"');
+    expect(result.systemPrompt).toContain('"initiative_identifier":"B-184"');
+    expect(result.systemPrompt).not.toContain(issueId);
     expect(result.systemPrompt).toContain("Current decision");
     expect(result.systemPrompt).toContain("Related evidence");
     expect(result.systemPrompt).toContain("B-100");
+    expect(result.systemPrompt).not.toContain(workspace);
+    expect(result.systemPrompt).not.toContain(initiative);
   });
 
   it("omits all memory when authoritative refresh fails", async () => {
@@ -160,6 +178,51 @@ describe("Workgraph Pi extension", () => {
     expect(ui.setStatus).toHaveBeenCalledWith("workgraph", undefined);
   });
 
+  it("establishes the Multica activity baseline after locking the initiative", async () => {
+    const runtime = fakeRuntime();
+    runtime.env.MULTICA_ISSUE_ID = issueId;
+    vi.mocked(runtime.multica.resolveIssue).mockResolvedValueOnce(resolution());
+    vi.mocked(runtime.lockInitiative).mockReturnValueOnce(runtime.scope!);
+    const harness = install(runtime);
+    const { context: ctx } = context();
+
+    await harness.handlers.get("session_start")!({}, ctx);
+
+    expect(runtime.lockInitiative).toHaveBeenCalledOnce();
+    expect(runtime.reconcileActivity).toHaveBeenCalledOnce();
+  });
+
+  it("offers three recent initiatives by readable ID and accepts an ID manually", async () => {
+    const runtime = fakeRuntime();
+    const roots = ["B-201", "B-200", "B-184"].map((identifier, index) => ({
+      ...resolution().root,
+      id: `00000000-0000-4000-8000-${String(201 - index).padStart(12, "0")}`,
+      identifier,
+      title: `Initiative ${identifier}`,
+    }));
+    vi.mocked(runtime.multica.recentRootInitiatives).mockResolvedValueOnce(roots);
+    vi.mocked(runtime.multica.resolveIssue).mockResolvedValueOnce(resolution());
+    vi.mocked(runtime.lockInitiative).mockReturnValueOnce(runtime.scope!);
+    const harness = install(runtime);
+    const { context: ctx, ui } = context();
+    (ctx as any).hasUI = true;
+    ui.select.mockResolvedValueOnce("Enter initiative ID (XYZ-123)");
+    ui.input.mockResolvedValueOnce("B-184");
+
+    await harness.handlers.get("session_start")!({}, ctx);
+
+    expect(runtime.multica.recentRootInitiatives).toHaveBeenCalledWith(workspace, 3);
+    expect(ui.select).toHaveBeenCalledWith("Select initiative", [
+      "Initiative B-201 [in_progress] (B-201)",
+      "Initiative B-200 [in_progress] (B-200)",
+      "Initiative B-184 [in_progress] (B-184)",
+      "Enter initiative ID (XYZ-123)",
+      "No initiative",
+    ]);
+    expect(ui.input).toHaveBeenCalledWith("Initiative ID (XYZ-123)");
+    expect(runtime.multica.resolveIssue).toHaveBeenCalledWith("B-184", workspace);
+  });
+
   it("forwards constrained recall scope and bounded remember fields", async () => {
     const runtime = fakeRuntime();
     const harness = install(runtime);
@@ -169,19 +232,54 @@ describe("Workgraph Pi extension", () => {
 
     await (recall.execute as any)("call-1", { query: "history", scope: "both", top_k: 5 }, ctx.signal, undefined, ctx);
     const remembered = await (remember.execute as any)("call-2", {
-      entity_type: "Decision", authority: "confirmed", entity_id: "decision:1",
+      entity_type: "Decision", authority: "confirmed", entity_identifier: "decision:workspace-memory",
+      entity_label: "Workspace memory decision",
       summary: "Use workspace memory.", source: "test://decision",
-      relations: [{ type: "about", target: `issue:${initiative}` }],
+      relations: [{ type: "about", target: "issue:B-184" }],
     }, ctx.signal, undefined, ctx);
 
     expect(runtime.recall).toHaveBeenCalledWith("history", "both", 5, ctx.signal);
     expect(runtime.remember).toHaveBeenCalledWith({
-      entityType: "Decision", authority: "confirmed", entityId: "decision:1",
+      entityType: "Decision", authority: "confirmed", entityIdentifier: "decision:workspace-memory",
+      entityLabel: "Workspace memory decision",
       summary: "Use workspace memory.", source: "test://decision", sourceRevision: undefined,
-      relations: [{ type: "about", target: `issue:${initiative}` }],
+      relations: [{ type: "about", target: "issue:B-184" }],
     });
     expect(remembered.details.value).toEqual({
-      event_id: "event-1", payload_hash: "hash-1", delivery: "queued",
+      entity_identifier: "decision:workspace-memory", delivery: "queued",
     });
+  });
+
+  it("keeps internal issue UUIDs out of the status tool response", async () => {
+    const runtime = fakeRuntime();
+    const harness = install(runtime);
+    const status = harness.tools.get("initiative_memory_status")!;
+
+    const response = await (status.execute as any)("call-status", {}, undefined, undefined, context().context);
+
+    expect(response.details.value.scope).toMatchObject({
+      initiativeIdentifier: "B-184",
+      issueIdentifier: "B-185",
+    });
+    expect(response.content[0].text).not.toContain(issueId);
+  });
+
+  it("reports each timeline event with its originating issue identifier", async () => {
+    const runtime = fakeRuntime();
+    vi.mocked(runtime.timeline).mockReturnValueOnce([{
+      timestamp: "2026-09-04T10:00:00.000Z",
+      eventType: "evidence_recorded",
+      issueIdentifier: "B-999",
+      initiativeIdentifier: "B-184",
+      boundedSummary: "Historical event.",
+      source: "multica://issues/B-999",
+      authority: "observed",
+      nodeSets: [],
+    } as any]);
+    const timeline = install(runtime).tools.get("initiative_timeline")!;
+
+    const response = await (timeline.execute as any)("call-timeline", {}, undefined, undefined, context().context);
+
+    expect(response.details.value[0].issue_identifier).toBe("B-999");
   });
 });

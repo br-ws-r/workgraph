@@ -19,30 +19,28 @@ function eventInput(overrides: Partial<OutboxEventInput> = {}): OutboxEventInput
     initiativeId: initiative,
     initiativeIdentifier: "WG-1",
     issueId: "00000000-0000-4000-8000-000000000002",
+    issueIdentifier: "WG-2",
     projectId: "00000000-0000-4000-8000-000000000011",
     eventType: "decision_recorded",
     boundedSummary: "Scoped decision.",
     source: "multica://issues/test",
     authority: "confirmed",
-    nodeSets: [
-      "initiative:WG-1", "type:decision", "authority:confirmed",
-      "project:00000000-0000-4000-8000-000000000011",
-    ],
-    schemaVersion: "2.0.0",
-    extractionPromptVersion: "1.0.0",
+    nodeSets: ["initiative:WG-1", "type:decision", "authority:confirmed", "project:devbox-00000000"],
+    schemaVersion: "3.0.0",
+    extractionPromptVersion: "2.0.0",
     memoryRecord: {
-      schema_version: "2.0.0", extraction_prompt_version: "1.0.0",
-      workspace_id: workspaceId,
+      schema_version: "3.0.0", extraction_prompt_version: "2.0.0",
+      workspace_id: workspaceId, workspace_identifier: "brwsr", workspace_name: "BRWSR",
       entity_type: "Decision", authority: "confirmed", initiative_id: initiative,
       initiative_identifier: "WG-1",
       issue_id: "00000000-0000-4000-8000-000000000002",
+      issue_identifier: "WG-2",
       project_id: "00000000-0000-4000-8000-000000000011",
-      entity_id: "decision:test", summary: "Scoped decision.", relations: [],
-      node_sets: [
-        "initiative:WG-1", "type:decision", "authority:confirmed",
-        "project:00000000-0000-4000-8000-000000000011",
-      ],
-      source: "multica://issues/test", observed_at: "2026-08-30T09:00:00.000Z",
+      project_identifier: "devbox-00000000",
+      entity_identifier: "decision:test", entity_label: "Test decision",
+      summary: "Scoped decision.", relations: [],
+      node_sets: ["initiative:WG-1", "type:decision", "authority:confirmed", "project:devbox-00000000"],
+      source: "multica://issues/WG-2", observed_at: "2026-08-30T09:00:00.000Z",
     },
     ...overrides,
   };
@@ -64,13 +62,14 @@ describe("workspace outbox", () => {
       workspaceId: workspaceA,
       initiativeIdentifier: "WG-1",
       issueId: "00000000-0000-4000-8000-000000000002",
+      issueIdentifier: "WG-2",
       projectId: "00000000-0000-4000-8000-000000000011",
       nodeSets: [
         "initiative:WG-1", "type:decision", "authority:confirmed",
-        "project:00000000-0000-4000-8000-000000000011",
+        "project:devbox-00000000",
       ],
-      schemaVersion: "2.0.0",
-      extractionPromptVersion: "1.0.0",
+      schemaVersion: "3.0.0",
+      extractionPromptVersion: "2.0.0",
     });
     first.close();
     second.close();
@@ -176,6 +175,35 @@ describe("workspace outbox", () => {
     expect(outbox.timeline(initiative).map((event) => event.eventId)).toEqual([
       earlier.eventId, later.eventId, sameTime.eventId,
     ]);
+    outbox.close();
+  });
+
+  it("atomically initializes and persists seen Multica activity IDs", () => {
+    const outbox = new WorkgraphOutbox(databasePath());
+    const issueId = "00000000-0000-4000-8000-000000000002";
+
+    expect(outbox.hasActivityBaseline(workspaceA, issueId)).toBe(false);
+    expect(outbox.initializeActivityBaseline(workspaceA, issueId, ["activity-a"])).toBe(true);
+    expect(outbox.initializeActivityBaseline(workspaceA, issueId, ["activity-b"])).toBe(false);
+    expect(outbox.hasActivityBaseline(workspaceA, issueId)).toBe(true);
+    expect(outbox.hasSeenActivity(workspaceA, issueId, "activity-a")).toBe(true);
+    expect(outbox.hasSeenActivity(workspaceA, issueId, "activity-b")).toBe(false);
+    outbox.markActivitySeen(workspaceA, issueId, "activity-b");
+    expect(outbox.hasSeenActivity(workspaceA, issueId, "activity-b")).toBe(true);
+    outbox.close();
+  });
+
+  it("persists a failed baseline without overwriting a ready baseline", () => {
+    const outbox = new WorkgraphOutbox(databasePath());
+    const issueId = "00000000-0000-4000-8000-000000000002";
+    const otherIssue = "00000000-0000-4000-8000-000000000003";
+
+    outbox.markActivityBaselineFailed(workspaceA, issueId);
+    expect(outbox.activityBaselineStatus(workspaceA, issueId)).toBe("failed");
+    expect(() => outbox.initializeActivityBaseline(workspaceA, issueId, [])).toThrow("operator recovery");
+    outbox.initializeActivityBaseline(workspaceA, otherIssue, []);
+    outbox.markActivityBaselineFailed(workspaceA, otherIssue);
+    expect(outbox.activityBaselineStatus(workspaceA, otherIssue)).toBe("ready");
     outbox.close();
   });
 });

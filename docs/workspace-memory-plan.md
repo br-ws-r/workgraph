@@ -12,7 +12,7 @@ dataset for each verified Multica workspace and overlapping NodeSets to keep
 initiative memory focused while permitting deliberate recall of related work:
 
 ```text
-workgraph-workspace-<workspace-uuid>
+workgraph-workspace-<workspace-slug>
   +-- initiative:B-184
   +-- type:decision
   +-- authority:confirmed
@@ -21,8 +21,9 @@ workgraph-workspace-<workspace-uuid>
   +-- repo:<verified-repository>
 ```
 
-The root issue UUID remains the canonical `initiative_id`. The stable Multica
-identifier is stored separately and used for the readable initiative NodeSet.
+The root issue UUID remains internal provenance in `initiative_id`. The stable
+Multica identifier is stored separately and used for the readable initiative
+NodeSet and graph-facing references.
 The ontology remains a small, generic vocabulary for software, operations,
 research, planning, hiring, procurement, and other kinds of work.
 
@@ -56,9 +57,9 @@ Pi lifecycle hooks remain essential behavior:
 | --- | --- |
 | `session_start` | Resolve and lock the workspace and root initiative |
 | `before_agent_start` | Refresh Multica and inject two-lane Cognee context |
-| `agent_settled` | Record a bounded run outcome |
-| `session_before_compact` | Record a compaction anchor |
-| `session_shutdown` | Complete one serialized flush and close SQLite |
+| `agent_settled` | Reconcile new Multica activity, then record a bounded run outcome |
+| `session_before_compact` | Reconcile new Multica activity, then record a compaction anchor |
+| `session_shutdown` | Reconcile activity, drain bounded delivery batches, and close SQLite |
 
 Agents do not have to call context or settle tools to activate this lifecycle.
 The existing `use-workgraph` skill remains responsible for capture judgment,
@@ -70,10 +71,10 @@ authority rules, and safe use of recalled information.
 
 Every memory-enabled process requires a valid `MULTICA_WORKSPACE_ID`. All
 Multica reads used to establish or refresh scope must use that workspace. The
-workspace UUID selects exactly one dataset:
+workspace's verified readable slug selects exactly one dataset:
 
 ```text
-workgraph-workspace-<workspace-uuid>
+workgraph-workspace-<workspace-slug>
 ```
 
 Dataset names, IDs, and NodeSets are derived by Workgraph. A tool caller cannot
@@ -102,14 +103,15 @@ a child issue remains invalid for explicit interactive selection.
 
 Workgraph locks these values for the Pi process lifetime:
 
-- workspace UUID and dataset;
-- current issue UUID at selection time;
-- root initiative UUID and stable identifier;
+- workspace UUID, readable identifier, and dataset;
+- current issue UUID and readable identifier at selection time;
+- root initiative UUID and readable identifier;
+- project and parent issue UUID/readable-identifier pairs where present;
 - task, run, and agent identifiers where available.
 
 Before context injection and automatic permanent capture, Workgraph re-reads
-the issue from Multica. A changed root or workspace fails closed and never
-switches the dataset in-process.
+the issue from Multica. A changed workspace, root, issue, project, parent, or
+readable identifier fails closed and never switches the dataset in-process.
 
 ## NodeSets
 
@@ -216,7 +218,7 @@ Use a bounded generic relation set including `root_of`, `child_of`, `part_of`,
 `produced`, `supports`, `contradicts`, `derived_from`, `about`, `verified_by`,
 `resulted_in`, `observed_in`, and `related_to`.
 
-Domain-specific detail belongs in stable entity IDs, bounded summaries,
+Domain-specific detail belongs in stable entity identifiers, bounded summaries,
 sources, and relations. Workgraph does not model files, functions, classes,
 ASTs, transcript turns, or log lines.
 
@@ -261,14 +263,15 @@ SQLite remains the exact append-only event timeline and at-least-once delivery
 outbox. Cognee remains a non-deterministic semantic projection.
 
 The workspace layout is a clean pre-1.0 cutover. New code uses a new default
-SQLite file, `workgraph-workspace.db`, and does not read, rewrite, or replay the
-old `workgraph.db`. Existing initiative datasets remain untouched and are not
-queried by the new release. There is no automatic Cognee or SQLite migration.
+SQLite file, `workgraph-workspace-v3.db`, and does not read, rewrite, or replay
+older Workgraph SQLite files. Existing UUID-named datasets remain untouched and
+are not queried by the new release. There is no automatic Cognee or SQLite
+migration.
 
 Each new event stores at least:
 
 - workspace UUID;
-- current issue UUID;
+- current issue UUID and readable identifier;
 - root initiative UUID and readable identifier;
 - project, task, agent, and run identifiers where known;
 - record type and authority;
@@ -285,8 +288,9 @@ expiring lease. A timeout after Cognee accepted a request can still produce an
 at-least-once duplicate because Cognee does not document support for Workgraph's
 idempotency key.
 
-Shutdown waits for the existing serialized writer, performs at most one final
-bounded flush, and never closes SQLite while another flush can still run.
+Shutdown waits for the existing serialized writer, drains bounded batches until
+the queue is empty, delivery fails, or the deadline expires, and never closes
+SQLite while another flush can still run.
 
 ## Tool surface
 

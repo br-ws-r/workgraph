@@ -47,25 +47,29 @@ current issue, authority, provenance, and observation time:
 
 ```json
 {
-  "schema_version": "2.0.0",
-  "extraction_prompt_version": "1.0.0",
+  "schema_version": "3.0.0",
+  "extraction_prompt_version": "2.0.0",
   "workspace_id": "00000000-0000-4000-8000-000000000010",
+  "workspace_identifier": "brwsr",
+  "workspace_name": "BRWSR",
   "initiative_id": "00000000-0000-4000-8000-000000000001",
   "initiative_identifier": "B-184",
   "issue_id": "00000000-0000-4000-8000-000000000002",
+  "issue_identifier": "B-185",
   "entity_type": "Decision",
   "authority": "confirmed",
-  "entity_id": "decision:workspace-memory",
+  "entity_identifier": "decision:workspace-memory",
+  "entity_label": "Workspace memory decision",
   "summary": "Use one memory dataset per verified workspace.",
   "relations": [
-    { "type": "about", "target": "issue:00000000-0000-4000-8000-000000000001" }
+    { "type": "about", "target": "issue:B-185" }
   ],
   "node_sets": [
     "initiative:B-184",
     "type:decision",
     "authority:confirmed"
   ],
-  "source": "multica://issues/00000000-0000-4000-8000-000000000002",
+  "source": "multica://issues/B-185",
   "observed_at": "2026-09-04T09:00:00Z"
 }
 ```
@@ -75,10 +79,10 @@ output, shell logs, full diffs, and unrestricted file contents are forbidden.
 
 ## Scope and NodeSets
 
-A verified workspace UUID selects
-`workgraph-workspace-<workspace-uuid>`. The root issue UUID remains canonical
-in `initiative_id`; the stable readable Multica identifier is retained as
-`initiative_identifier`.
+A verified workspace slug selects `workgraph-workspace-<workspace-slug>`. UUID
+fields remain exact internal identity and provenance. Readable `*_identifier`
+fields, semantic entity identifiers, relation targets, filenames, and NodeSets
+must not contain full UUIDs.
 
 Workgraph derives the complete ordered NodeSet list server-side. Every record
 has exactly one `initiative:`, `type:`, and `authority:` NodeSet. It may also

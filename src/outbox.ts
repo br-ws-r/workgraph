@@ -31,6 +31,7 @@ export class WorkgraphOutbox {
         initiative_id TEXT NOT NULL,
         initiative_identifier TEXT NOT NULL,
         issue_id TEXT NOT NULL,
+        issue_identifier TEXT NOT NULL,
         project_id TEXT,
         task_id TEXT,
         run_id TEXT,
@@ -56,6 +57,19 @@ export class WorkgraphOutbox {
       CREATE INDEX IF NOT EXISTS workgraph_events_workspace_pending
         ON workgraph_events (workspace_id, delivered_at, sequence)
         WHERE memory_record_json IS NOT NULL;
+      CREATE TABLE IF NOT EXISTS multica_activity_state (
+        workspace_id TEXT NOT NULL,
+        issue_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('ready', 'failed')),
+        initialized_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, issue_id)
+      );
+      CREATE TABLE IF NOT EXISTS multica_activity_seen (
+        workspace_id TEXT NOT NULL,
+        issue_id TEXT NOT NULL,
+        activity_id TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, issue_id, activity_id)
+      );
     `);
   }
 
@@ -65,12 +79,12 @@ export class WorkgraphOutbox {
     this.#db.prepare(`
       INSERT OR IGNORE INTO workgraph_events (
         event_id, timestamp, workspace_id, initiative_id, initiative_identifier,
-        issue_id, project_id, task_id, run_id, agent_id, event_type,
+        issue_id, issue_identifier, project_id, task_id, run_id, agent_id, event_type,
         bounded_summary, source, source_revision, authority, node_sets_json,
         schema_version, extraction_prompt_version, payload_hash, memory_record_json
       ) VALUES (
         @eventId, @timestamp, @workspaceId, @initiativeId, @initiativeIdentifier,
-        @issueId, @projectId, @taskId, @runId, @agentId, @eventType,
+        @issueId, @issueIdentifier, @projectId, @taskId, @runId, @agentId, @eventType,
         @boundedSummary, @source, @sourceRevision, @authority, @nodeSetsJson,
         @schemaVersion, @extractionPromptVersion, @payloadHash, @memoryRecordJson
       )
@@ -81,6 +95,7 @@ export class WorkgraphOutbox {
       initiativeId: event.initiativeId,
       initiativeIdentifier: event.initiativeIdentifier,
       issueId: event.issueId,
+      issueIdentifier: event.issueIdentifier,
       projectId: event.projectId ?? null,
       taskId: event.taskId ?? null,
       runId: event.runId ?? null,
@@ -141,6 +156,68 @@ export class WorkgraphOutbox {
     `).all(initiativeId, bounded) as Record<string, unknown>[]).map(mapRow).reverse();
   }
 
+  hasActivityBaseline(workspaceId: string, issueId: string): boolean {
+    return this.activityBaselineStatus(workspaceId, issueId) === "ready";
+  }
+
+  activityBaselineStatus(workspaceId: string, issueId: string): "ready" | "failed" | undefined {
+    const row = this.#db.prepare(`
+      SELECT status FROM multica_activity_state WHERE workspace_id = ? AND issue_id = ?
+    `).get(workspaceId, issueId) as Record<string, unknown> | undefined;
+    return row ? String(row.status) as "ready" | "failed" : undefined;
+  }
+
+  initializeActivityBaseline(workspaceId: string, issueId: string, activityIds: string[]): boolean {
+    if (!workspaceId.trim() || !issueId.trim()) throw new Error("workspaceId and issueId are required");
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      const status = this.activityBaselineStatus(workspaceId, issueId);
+      if (status === "ready") {
+        this.#db.exec("COMMIT");
+        return false;
+      }
+      if (status === "failed") throw new Error("Multica activity baseline requires operator recovery");
+      const insert = this.#db.prepare(`
+        INSERT OR IGNORE INTO multica_activity_seen (workspace_id, issue_id, activity_id)
+        VALUES (?, ?, ?)
+      `);
+      for (const activityId of activityIds) insert.run(workspaceId, issueId, activityId);
+      this.#db.prepare(`
+        INSERT INTO multica_activity_state (workspace_id, issue_id, status, initialized_at)
+        VALUES (?, ?, 'ready', ?)
+      `).run(workspaceId, issueId, new Date().toISOString());
+      this.#db.exec("COMMIT");
+      return true;
+    } catch (error) {
+      this.#db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  markActivityBaselineFailed(workspaceId: string, issueId: string): void {
+    this.#db.prepare(`
+      INSERT INTO multica_activity_state (workspace_id, issue_id, status, initialized_at)
+      VALUES (?, ?, 'failed', ?)
+      ON CONFLICT (workspace_id, issue_id) DO UPDATE SET
+        status = 'failed', initialized_at = excluded.initialized_at
+      WHERE multica_activity_state.status != 'ready'
+    `).run(workspaceId, issueId, new Date().toISOString());
+  }
+
+  hasSeenActivity(workspaceId: string, issueId: string, activityId: string): boolean {
+    return Boolean(this.#db.prepare(`
+      SELECT 1 FROM multica_activity_seen
+      WHERE workspace_id = ? AND issue_id = ? AND activity_id = ?
+    `).get(workspaceId, issueId, activityId));
+  }
+
+  markActivitySeen(workspaceId: string, issueId: string, activityId: string): void {
+    this.#db.prepare(`
+      INSERT OR IGNORE INTO multica_activity_seen (workspace_id, issue_id, activity_id)
+      VALUES (?, ?, ?)
+    `).run(workspaceId, issueId, activityId);
+  }
+
   markDelivered(eventId: string, owner?: string, deliveredAt = new Date().toISOString()): boolean {
     const result = owner === undefined
       ? this.#db.prepare(`
@@ -184,6 +261,7 @@ function mapRow(row: Record<string, unknown>): TimelineEntry {
     initiativeId: String(row.initiative_id),
     initiativeIdentifier: String(row.initiative_identifier),
     issueId: String(row.issue_id),
+    issueIdentifier: String(row.issue_identifier),
     projectId: stringOrUndefined(row.project_id),
     taskId: stringOrUndefined(row.task_id),
     runId: stringOrUndefined(row.run_id),

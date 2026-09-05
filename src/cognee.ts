@@ -81,7 +81,12 @@ export class CogneeApiClient {
 
   async remember(record: MemoryRecord, dataset: string, idempotencyKey: string, signal?: AbortSignal): Promise<unknown> {
     const form = new FormData();
-    const filename = `${record.entity_id.replace(/[^A-Za-z0-9._-]/g, "_")}.json`;
+    const readable = record.entity_label.normalize("NFKD")
+      .replace(/[^A-Za-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .toLowerCase()
+      .slice(0, 100) || "workgraph-record";
+    const filename = `${readable}-${idempotencyKey.slice(0, 10)}.json`;
     form.append("data", new Blob([JSON.stringify(record)], { type: "application/json" }), filename);
     form.append("datasetName", dataset);
     for (const nodeSet of record.node_sets) form.append("node_set", nodeSet);

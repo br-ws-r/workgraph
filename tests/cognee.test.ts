@@ -5,7 +5,7 @@ import { CogneeApiClient, createCogneeClientFromEnv } from "../src/cognee.js";
 const workspace = "00000000-0000-4000-8000-000000000010";
 const initiative = "00000000-0000-4000-8000-000000000001";
 const issue = "00000000-0000-4000-8000-000000000002";
-const dataset = `workgraph-workspace-${workspace}`;
+const dataset = "workgraph-workspace-brwsr";
 
 describe("Cognee remote transport", () => {
   it("routes recall only to the configured endpoint and locked dataset", async () => {
@@ -50,11 +50,12 @@ describe("Cognee remote transport", () => {
     });
     await client.remember({
       schema_version: SCHEMA_VERSION, extraction_prompt_version: EXTRACTION_PROMPT_VERSION,
-      workspace_id: workspace, initiative_identifier: "B-184", issue_id: issue,
+      workspace_id: workspace, workspace_identifier: "brwsr", workspace_name: "BRWSR",
+      initiative_identifier: "B-184", issue_id: issue, issue_identifier: "B-185",
       entity_type: "Decision", authority: "confirmed", initiative_id: initiative,
-      entity_id: "decision:test", summary: "Scoped.", relations: [],
+      entity_identifier: "decision:test", entity_label: "Test decision", summary: "Scoped.", relations: [],
       node_sets: ["initiative:B-184", "type:decision", "authority:confirmed"],
-      source: `multica://issues/${issue}`, observed_at: "2026-08-30T09:00:00.000Z",
+      source: "multica://issues/B-185", observed_at: "2026-08-30T09:00:00.000Z",
     }, dataset, "payload-hash");
     const [url, init] = fetch.mock.calls[0] as unknown as [URL, RequestInit];
     expect(url.toString()).toBe("http://127.0.0.1:8000/api/v1/remember");
@@ -68,6 +69,7 @@ describe("Cognee remote transport", () => {
       "initiative:B-184", "type:decision", "authority:confirmed",
     ]);
     expect((init.body as FormData).get("custom_prompt")).toBe(EXTRACTION_PROMPT);
+    expect(((init.body as FormData).get("data") as File).name).toBe("test-decision-payload-ha.json");
   });
 
   it("supports unauthenticated loopback self-hosting", async () => {
@@ -104,11 +106,11 @@ describe("Cognee remote transport", () => {
     await expect(client.recall("query", dataset)).rejects.toThrow("not a list");
     await expect(client.remember({
       schema_version: SCHEMA_VERSION, extraction_prompt_version: EXTRACTION_PROMPT_VERSION,
-      workspace_id: workspace, initiative_id: initiative, initiative_identifier: "B-184",
-      issue_id: issue, entity_type: "Outcome", authority: "observed",
-      entity_id: "outcome:1", summary: "Finished.", relations: [],
+      workspace_id: workspace, workspace_identifier: "brwsr", initiative_id: initiative, initiative_identifier: "B-184",
+      issue_id: issue, issue_identifier: "B-185", entity_type: "Outcome", authority: "observed",
+      entity_identifier: "outcome:1", entity_label: "B-185 outcome", summary: "Finished.", relations: [],
       node_sets: ["initiative:B-184", "type:outcome", "authority:observed"],
-      source: `multica://issues/${issue}`, observed_at: "2026-09-04T12:00:00.000Z",
+      source: "multica://issues/B-185", observed_at: "2026-09-04T12:00:00.000Z",
     }, dataset, "hash")).rejects.toThrow("pipeline failed");
   });
 
@@ -128,11 +130,11 @@ describe("Cognee remote transport", () => {
     await expect(client.recall("query", dataset)).rejects.toThrow("unsupported shape");
     await expect(client.remember({
       schema_version: SCHEMA_VERSION, extraction_prompt_version: EXTRACTION_PROMPT_VERSION,
-      workspace_id: workspace, initiative_id: initiative, initiative_identifier: "B-184",
-      issue_id: issue, entity_type: "Outcome", authority: "observed",
-      entity_id: "outcome:1", summary: "Finished.", relations: [],
+      workspace_id: workspace, workspace_identifier: "brwsr", initiative_id: initiative, initiative_identifier: "B-184",
+      issue_id: issue, issue_identifier: "B-185", entity_type: "Outcome", authority: "observed",
+      entity_identifier: "outcome:1", entity_label: "B-185 outcome", summary: "Finished.", relations: [],
       node_sets: ["initiative:B-184", "type:outcome", "authority:observed"],
-      source: `multica://issues/${issue}`, observed_at: "2026-09-04T12:00:00.000Z",
+      source: "multica://issues/B-185", observed_at: "2026-09-04T12:00:00.000Z",
     }, dataset, "hash")).rejects.toThrow("did not complete: running");
   });
 

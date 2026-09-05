@@ -1,8 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { CogneeApiClient, createCogneeClientFromEnv, type CogneeRecallEntry } from "./cognee.js";
-import { MulticaReader, type InitiativeResolution } from "./multica.js";
+import { MulticaReader, type InitiativeResolution, type MulticaActivity } from "./multica.js";
 import { WorkgraphOutbox, type TimelineEntry } from "./outbox.js";
 import {
   EXTRACTION_PROMPT_VERSION,
@@ -23,6 +23,8 @@ export type RecallScope = "initiative" | "workspace" | "both";
 
 export interface WorkgraphScope {
   workspaceId: string;
+  workspaceIdentifier: string;
+  workspaceName: string;
   initiativeId: string;
   initiativeIdentifier: string;
   dataset: string;
@@ -30,8 +32,11 @@ export interface WorkgraphScope {
   runId?: string;
   agentId?: string;
   issueId: string;
+  issueIdentifier: string;
   projectId?: string;
+  projectIdentifier?: string;
   parentIssueId?: string;
+  parentIssueIdentifier?: string;
   stage?: number;
   rootTitle?: string;
 }
@@ -41,7 +46,8 @@ export interface RecalledMemory {
   initiativeId: string;
   initiativeIdentifier: string;
   entityType: NodeType;
-  entityId: string;
+  entityIdentifier: string;
+  entityLabel: string;
   authority: Authority;
   summary: string;
   source: string;
@@ -74,8 +80,11 @@ export interface RememberInput {
   source: string;
   sourceRevision?: string;
   relations?: Array<{ type: EdgeType; target: string }>;
-  entityId?: string;
+  entityIdentifier?: string;
+  entityLabel?: string;
   eventType?: EventType;
+  eventId?: string;
+  observedAt?: string;
 }
 
 export class WorkgraphRuntime {
@@ -87,6 +96,7 @@ export class WorkgraphRuntime {
   readonly #deliveryTimeoutMs: number;
   #scope?: WorkgraphScope;
   #writes = Promise.resolve<unknown>(undefined);
+  #reconciliations = Promise.resolve<unknown>(undefined);
   #closing = false;
   #shutdown?: Promise<void>;
 
@@ -94,7 +104,7 @@ export class WorkgraphRuntime {
     this.env = options.env ?? process.env;
     const userDataDir = this.env.XDG_DATA_HOME?.trim() || join(homedir(), ".local", "share");
     const dataDir = this.env.WORKGRAPH_DATA_DIR?.trim() || join(userDataDir, "workgraph");
-    this.outbox = options.outbox ?? new WorkgraphOutbox(join(dataDir, "workgraph-workspace.db"));
+    this.outbox = options.outbox ?? new WorkgraphOutbox(join(dataDir, "workgraph-workspace-v3.db"));
     this.cognee = options.cognee ?? createCogneeClientFromEnv(this.env);
     this.multica = options.multica ?? new MulticaReader({ binary: this.env.MULTICA_BIN?.trim() || "multica" });
     const configuredDeliveryTimeout = Number(this.env.WORKGRAPH_COGNEE_REMEMBER_TIMEOUT_MS ?? "120000");
@@ -108,23 +118,33 @@ export class WorkgraphRuntime {
   lockInitiative(resolution: InitiativeResolution): WorkgraphScope {
     if (this.#scope) throw new Error("Workgraph scope is immutable for the lifetime of this Pi process");
     const workspaceId = requiredValue(this.env.MULTICA_WORKSPACE_ID, "MULTICA_WORKSPACE_ID").toLowerCase();
-    if (resolution.issue.workspace_id.toLowerCase() !== workspaceId || resolution.root.workspace_id.toLowerCase() !== workspaceId) {
+    if (resolution.workspace.id.toLowerCase() !== workspaceId
+      || resolution.issue.workspace_id.toLowerCase() !== workspaceId
+      || resolution.root.workspace_id.toLowerCase() !== workspaceId) {
       throw new Error("Multica resolution does not belong to the configured workspace");
     }
+    validateResolutionLinks(resolution);
     const initiativeId = resolution.root.id.toLowerCase();
     const initiativeIdentifier = requiredValue(resolution.root.identifier, "Multica root identifier");
     const taskId = resolution.taskId;
     const nextScope = Object.freeze({
       workspaceId,
+      workspaceIdentifier: resolution.workspace.slug,
+      workspaceName: resolution.workspace.name,
       initiativeId,
       initiativeIdentifier,
-      dataset: datasetForWorkspace(workspaceId),
+      dataset: datasetForWorkspace(resolution.workspace.slug),
       taskId,
       runId: this.env.MULTICA_RUN_ID?.trim() || taskId,
       agentId: this.env.MULTICA_AGENT_ID?.trim(),
       issueId: resolution.issue.id.toLowerCase(),
+      issueIdentifier: requiredValue(resolution.issue.identifier, "Multica issue identifier"),
       projectId: resolution.issue.project_id?.toLowerCase() || undefined,
+      projectIdentifier: resolution.project
+        ? projectIdentifier(resolution.project.title, resolution.project.id)
+        : undefined,
       parentIssueId: resolution.issue.parent_issue_id?.toLowerCase() || undefined,
+      parentIssueIdentifier: resolution.issue.parent_issue_id ? resolution.parent?.identifier : undefined,
       stage: resolution.issue.stage ?? undefined,
       rootTitle: resolution.root.title,
     });
@@ -132,8 +152,8 @@ export class WorkgraphRuntime {
       initiativeIdentifier,
       entityType: "Run",
       authority: "observed",
-      projectId: nextScope.projectId,
-      parentIssueId: nextScope.parentIssueId,
+      projectIdentifier: nextScope.projectIdentifier,
+      parentIssueIdentifier: nextScope.parentIssueIdentifier,
       stage: nextScope.stage,
     });
     this.#scope = nextScope;
@@ -146,7 +166,7 @@ export class WorkgraphRuntime {
       );
       this.append(
         "run_started",
-        `Run ${nextScope.runId ?? "interactive"} started for issue ${nextScope.issueId}.`,
+        `${nextScope.runId ? "Managed" : "Interactive"} run started for issue ${nextScope.issueIdentifier}.`,
         this.issueSource(),
         "observed",
       );
@@ -163,21 +183,25 @@ export class WorkgraphRuntime {
     source: string,
     authority: Authority,
     memoryRecord?: MemoryRecord,
+    identity?: { eventId?: string; timestamp?: string },
   ): TimelineEntry | undefined {
     if (!this.#scope) return undefined;
     const nodeSets = memoryRecord?.node_sets ?? deriveNodeSets({
       initiativeIdentifier: this.#scope.initiativeIdentifier,
       entityType: eventType === "initiative_selected" ? "Initiative" : "Run",
       authority,
-      projectId: this.#scope.projectId,
-      parentIssueId: this.#scope.parentIssueId,
+      projectIdentifier: this.#scope.projectIdentifier,
+      parentIssueIdentifier: this.#scope.parentIssueIdentifier,
       stage: this.#scope.stage,
     });
     return this.outbox.append({
+      eventId: identity?.eventId,
+      timestamp: identity?.timestamp,
       workspaceId: this.#scope.workspaceId,
       initiativeId: this.#scope.initiativeId,
       initiativeIdentifier: this.#scope.initiativeIdentifier,
       issueId: this.#scope.issueId,
+      issueIdentifier: this.#scope.issueIdentifier,
       projectId: this.#scope.projectId,
       taskId: this.#scope.taskId,
       runId: this.#scope.runId,
@@ -202,6 +226,20 @@ export class WorkgraphRuntime {
     if (resolution.root.id.toLowerCase() !== this.#scope.initiativeId
       || resolution.root.identifier !== this.#scope.initiativeIdentifier) {
       throw new Error("Authoritative Multica root changed during an immutable Workgraph process");
+    }
+    validateResolutionLinks(resolution);
+    const currentProjectIdentifier = resolution.project
+      ? projectIdentifier(resolution.project.title, resolution.project.id)
+      : undefined;
+    if (resolution.workspace.id.toLowerCase() !== this.#scope.workspaceId
+      || resolution.workspace.slug !== this.#scope.workspaceIdentifier
+      || resolution.issue.id.toLowerCase() !== this.#scope.issueId
+      || resolution.issue.identifier !== this.#scope.issueIdentifier
+      || (resolution.issue.project_id?.toLowerCase() || undefined) !== this.#scope.projectId
+      || currentProjectIdentifier !== this.#scope.projectIdentifier
+      || (resolution.issue.parent_issue_id?.toLowerCase() || undefined) !== this.#scope.parentIssueId
+      || resolution.parent?.identifier !== this.#scope.parentIssueIdentifier) {
+      throw new Error("Authoritative Multica scope changed during an immutable Workgraph process");
     }
     return resolution;
   }
@@ -233,30 +271,49 @@ export class WorkgraphRuntime {
     return this.rememberVerified(input, await this.requireFreshResolution());
   }
 
+  async reconcileActivity(): Promise<number> {
+    if (this.#closing) throw new Error("Workgraph is shutting down");
+    const operation = this.#reconciliations.then(() => this.reconcileActivityNow());
+    this.#reconciliations = operation.catch(() => undefined);
+    return (await operation).captured;
+  }
+
   async settle(): Promise<TimelineEntry> {
-    const resolution = await this.requireFreshResolution();
+    if (this.#closing) throw new Error("Workgraph is shutting down");
+    const operation = this.#reconciliations.then(() => this.reconcileActivityNow());
+    this.#reconciliations = operation.catch(() => undefined);
+    const { resolution } = await operation;
     const scope = this.#scope!;
+    const observedAt = new Date().toISOString();
     return this.rememberVerified({
       entityType: "Outcome",
       authority: "observed",
-      summary: `Run ${scope.runId ?? "interactive"} settled. Multica issue ${resolution.issue.title ?? resolution.issue.identifier} is ${resolution.issue.status}.`,
+      summary: `Work on Multica issue ${resolution.issue.identifier} settled with authoritative status ${resolution.issue.status}.`,
       source: this.issueSource(),
-      entityId: `run:${scope.runId ?? scope.issueId}:outcome`,
-      relations: [{ type: "observed_in", target: `issue:${scope.issueId}` }],
+      entityIdentifier: semanticRecordIdentifier("outcome", scope.issueIdentifier, observedAt, scope.runId),
+      entityLabel: `${scope.issueIdentifier} run outcome`,
+      relations: [{ type: "observed_in", target: `issue:${scope.issueIdentifier}` }],
       eventType: "run_settled",
+      observedAt,
     }, resolution);
   }
 
   async compact(): Promise<TimelineEntry> {
-    const resolution = await this.requireFreshResolution();
+    if (this.#closing) throw new Error("Workgraph is shutting down");
+    const operation = this.#reconciliations.then(() => this.reconcileActivityNow());
+    this.#reconciliations = operation.catch(() => undefined);
+    const { resolution } = await operation;
     const scope = this.#scope!;
+    const observedAt = new Date().toISOString();
     return this.rememberVerified({
       entityType: "Run",
       authority: "observed",
       summary: `Compaction anchor for issue ${resolution.issue.title ?? resolution.issue.identifier}; authoritative status ${resolution.issue.status}. Consult the Workgraph timeline for durable decisions, blockers, artifacts, evidence, and outcomes.`,
       source: this.issueSource(),
-      entityId: `run:${scope.runId ?? scope.issueId}:compaction:${Date.now()}`,
+      entityIdentifier: semanticRecordIdentifier("compaction", scope.issueIdentifier, observedAt, scope.runId),
+      entityLabel: `${scope.issueIdentifier} compaction anchor`,
       eventType: "compaction_anchor",
+      observedAt,
     }, resolution);
   }
 
@@ -272,9 +329,12 @@ export class WorkgraphRuntime {
     return operation;
   }
 
-  private async flushNow(limit: number, timeoutMs: number): Promise<{ delivered: number; failed: number }> {
+  private async flushNow(
+    limit: number,
+    timeoutMs: number,
+    deadline = Date.now() + timeoutMs,
+  ): Promise<{ delivered: number; failed: number }> {
     if (!this.#scope || !this.cognee) return { delivered: 0, failed: 0 };
-    const deadline = Date.now() + timeoutMs;
     let delivered = 0;
     let failed = 0;
     const events = this.outbox.claimPending(
@@ -317,14 +377,22 @@ export class WorkgraphRuntime {
   async shutdown(): Promise<void> {
     if (this.#shutdown) return this.#shutdown;
     this.#closing = true;
-    const finalFlush = this.#writes.then(() => this.flushNow(25, this.#deliveryTimeoutMs));
-    this.#writes = finalFlush.catch(() => undefined);
-    this.#shutdown = this.#writes.then(() => { this.outbox.close(); });
+    this.#shutdown = (async () => {
+      if (this.#scope) {
+        const operation = this.#reconciliations.then(() => this.reconcileActivityNow());
+        this.#reconciliations = operation.catch(() => undefined);
+        await operation.catch(() => undefined);
+      }
+      const finalFlush = this.#writes.then(() => this.drainNow(25, this.#deliveryTimeoutMs));
+      this.#writes = finalFlush.catch(() => undefined);
+      await this.#writes;
+      this.outbox.close();
+    })();
     return this.#shutdown;
   }
 
   issueSource(): string {
-    return this.#scope ? `multica://issues/${this.#scope.issueId}` : "multica://unscoped";
+    return this.#scope ? `multica://issues/${this.#scope.issueIdentifier}` : "multica://unscoped";
   }
 
   async requireFreshResolution(): Promise<InitiativeResolution> {
@@ -370,36 +438,111 @@ export class WorkgraphRuntime {
     return result;
   }
 
-  private rememberVerified(input: RememberInput, resolution: InitiativeResolution): TimelineEntry {
+  private async reconcileActivityNow(): Promise<{ captured: number; resolution: InitiativeResolution }> {
+    if (!this.#scope) throw new Error("No initiative is selected; activity reconciliation is disabled");
+    const baselineStatus = this.outbox.activityBaselineStatus(this.#scope.workspaceId, this.#scope.issueId);
+    if (baselineStatus === "failed") {
+      throw new Error("Multica activity baseline requires operator recovery");
+    }
+    const needsBaseline = baselineStatus === undefined;
+    let result;
+    let resolution;
+    try {
+      result = await this.multica.issueActivities(this.#scope.issueId, this.#scope.workspaceId);
+      resolution = await this.requireFreshResolution();
+      if (needsBaseline) {
+        this.outbox.initializeActivityBaseline(
+          this.#scope.workspaceId,
+          this.#scope.issueId,
+          result.activities.map((activity) => activity.id),
+        );
+        return { captured: 0, resolution };
+      }
+    } catch (error) {
+      if (needsBaseline) this.outbox.markActivityBaselineFailed(this.#scope.workspaceId, this.#scope.issueId);
+      throw error;
+    }
+    const activityIds = result.activities.map((activity) => activity.id);
+    if (result.truncated && !activityIds.some((activityId) =>
+      this.outbox.hasSeenActivity(this.#scope!.workspaceId, this.#scope!.issueId, activityId))) {
+      throw new Error("Multica activity history was truncated without overlap with Workgraph history");
+    }
+    let captured = 0;
+    for (const activity of result.activities) {
+      if (this.outbox.hasSeenActivity(this.#scope.workspaceId, this.#scope.issueId, activity.id)) continue;
+      this.rememberVerified({
+        entityType: "Evidence",
+        authority: "observed",
+        entityIdentifier: activityEntityIdentifier(activity, this.#scope.issueIdentifier),
+        entityLabel: activityEntityLabel(activity, this.#scope.issueIdentifier),
+        summary: summarizeActivity(activity, resolution.issue.identifier),
+        source: `${this.issueSource()}/activity`,
+        sourceRevision: activity.id,
+        relations: [{ type: "observed_in", target: `issue:${this.#scope.issueIdentifier}` }],
+        eventType: "evidence_recorded",
+        eventId: `multica-activity:${activity.id}`,
+        observedAt: activity.created_at,
+      }, resolution, false);
+      this.outbox.markActivitySeen(this.#scope.workspaceId, this.#scope.issueId, activity.id);
+      captured += 1;
+    }
+    if (captured > 0) this.scheduleFlush();
+    return { captured, resolution };
+  }
+
+  private async drainNow(batchSize: number, timeoutMs: number): Promise<{ delivered: number; failed: number }> {
+    const deadline = Date.now() + timeoutMs;
+    let delivered = 0;
+    let failed = 0;
+    while (Date.now() < deadline) {
+      const result = await this.flushNow(batchSize, timeoutMs, deadline);
+      delivered += result.delivered;
+      failed += result.failed;
+      if (result.failed > 0 || result.delivered + result.failed < batchSize) break;
+    }
+    return { delivered, failed };
+  }
+
+  private rememberVerified(input: RememberInput, resolution: InitiativeResolution, scheduleDelivery = true): TimelineEntry {
     if (!this.#scope) throw new Error("No initiative is selected; memory writes are disabled");
     const issue = resolution.issue;
     const nodeSets = deriveNodeSets({
       initiativeIdentifier: this.#scope.initiativeIdentifier,
       entityType: input.entityType,
       authority: input.authority,
-      projectId: issue.project_id,
-      parentIssueId: issue.parent_issue_id,
+      projectIdentifier: this.#scope.projectIdentifier,
+      parentIssueIdentifier: this.#scope.parentIssueIdentifier,
       stage: issue.stage,
     });
     const record = MemoryRecordSchema.parse({
       schema_version: SCHEMA_VERSION,
       extraction_prompt_version: EXTRACTION_PROMPT_VERSION,
       workspace_id: this.#scope.workspaceId,
+      workspace_identifier: this.#scope.workspaceIdentifier,
+      workspace_name: this.#scope.workspaceName,
       initiative_id: this.#scope.initiativeId,
       initiative_identifier: this.#scope.initiativeIdentifier,
       issue_id: issue.id,
+      issue_identifier: this.#scope.issueIdentifier,
       project_id: issue.project_id,
+      project_identifier: this.#scope.projectIdentifier,
       parent_issue_id: issue.parent_issue_id,
+      parent_issue_identifier: this.#scope.parentIssueIdentifier,
       stage: issue.stage,
       entity_type: input.entityType,
       authority: input.authority,
-      entity_id: input.entityId ?? `${input.entityType.toLowerCase()}:${randomUUID()}`,
+      entity_identifier: input.entityIdentifier ?? semanticRecordIdentifier(
+        input.entityType.toLowerCase(),
+        this.#scope.issueIdentifier,
+        input.observedAt ?? new Date().toISOString(),
+      ),
+      entity_label: input.entityLabel ?? `${input.entityType} for ${this.#scope.issueIdentifier}: ${boundText(input.summary, 120)}`,
       summary: boundText(input.summary, 4000),
-      relations: input.relations ?? [{ type: "about", target: `issue:${this.#scope.initiativeId}` }],
+      relations: input.relations ?? [{ type: "about", target: `initiative:${this.#scope.initiativeIdentifier}` }],
       node_sets: nodeSets,
       source: input.source,
       source_revision: input.sourceRevision,
-      observed_at: new Date().toISOString(),
+      observed_at: input.observedAt ?? new Date().toISOString(),
     });
     const eventType = input.eventType
       ?? (input.entityType === "Decision" ? "decision_recorded"
@@ -407,11 +550,96 @@ export class WorkgraphRuntime {
           : input.entityType === "Artifact" ? "artifact_observed"
             : input.entityType === "Handoff" ? "handoff_observed"
               : "evidence_recorded");
-    const event = this.append(eventType, record.summary, record.source, record.authority, record);
+    const event = this.append(eventType, record.summary, record.source, record.authority, record, {
+      eventId: input.eventId,
+      timestamp: input.observedAt,
+    });
     if (!event) throw new Error("No initiative is selected; memory writes are disabled");
-    this.scheduleFlush();
+    if (scheduleDelivery) this.scheduleFlush();
     return event;
   }
+}
+
+function summarizeActivity(activity: MulticaActivity, issueIdentifier: string): string {
+  const details = activity.details;
+  const from = detailValue(details.from);
+  const to = detailValue(details.to);
+  let change: string;
+  switch (activity.action) {
+    case "status_changed": change = transition("Status", from, to); break;
+    case "priority_changed": change = transition("Priority", from, to); break;
+    case "title_changed": change = transition("Title", from, to); break;
+    case "start_date_changed": change = transition("Start date", from, to); break;
+    case "due_date_changed": change = transition("Due date", from, to); break;
+    case "assignee_changed":
+      change = transition("Assignee", actorValue(details, "from"), actorValue(details, "to"));
+      break;
+    case "created": change = "Issue was created."; break;
+    case "description_updated": change = "Description was updated."; break;
+    case "task_completed": change = "Task completed."; break;
+    case "task_failed": change = "Task failed."; break;
+    case "squad_leader_evaluated": {
+      const outcome = detailValue(details.outcome);
+      change = outcome ? `Squad leader evaluation recorded outcome ${outcome}.` : "Squad leader evaluation was recorded.";
+      break;
+    }
+    default: change = `Multica recorded activity ${boundText(activity.action, 128)}.`;
+  }
+  const actor = activity.actor_type
+    ? ` Actor type: ${boundText(activity.actor_type, 128)}.`
+    : "";
+  return `Multica issue ${issueIdentifier}: ${change}${actor}`;
+}
+
+function transition(label: string, from: string | undefined, to: string | undefined): string {
+  return `${label} changed from ${from ?? "(none)"} to ${to ?? "(none)"}.`;
+}
+
+function actorValue(details: Record<string, unknown>, prefix: "from" | "to"): string | undefined {
+  return detailValue(details[`${prefix}_type`]);
+}
+
+function detailValue(value: unknown): string | undefined {
+  return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+    ? boundText(String(value), 300)
+    : undefined;
+}
+
+function projectIdentifier(title: string, id: string): string {
+  const readable = title.normalize("NFKD").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase();
+  return `${readable || "project"}-${id.slice(0, 8).toLowerCase()}`;
+}
+
+function validateResolutionLinks(resolution: InitiativeResolution): void {
+  const projectId = resolution.issue.project_id?.toLowerCase();
+  if ((projectId === undefined) !== (resolution.project === undefined)
+    || (resolution.project && (resolution.project.id.toLowerCase() !== projectId
+      || resolution.project.workspace_id.toLowerCase() !== resolution.workspace.id.toLowerCase()))) {
+    throw new Error("Multica project metadata does not match the resolved issue");
+  }
+  const parentId = resolution.issue.parent_issue_id?.toLowerCase();
+  if ((parentId === undefined) !== (resolution.parent === undefined)
+    || (resolution.parent && (resolution.parent.id.toLowerCase() !== parentId
+      || resolution.parent.workspace_id.toLowerCase() !== resolution.workspace.id.toLowerCase()))) {
+    throw new Error("Multica parent metadata does not match the resolved issue");
+  }
+}
+
+function semanticRecordIdentifier(kind: string, issueIdentifier: string, observedAt: string, seed: string = randomUUID()): string {
+  const timestamp = observedAt.replace(/[-:.]/g, "").replace(/Z$/, "Z");
+  return `${kind.replace(/_/g, "-")}:${issueIdentifier}:${timestamp}:${shortHash(seed)}`;
+}
+
+function activityEntityIdentifier(activity: MulticaActivity, issueIdentifier: string): string {
+  return semanticRecordIdentifier(`evidence-${activity.action}`, issueIdentifier, activity.created_at, activity.id);
+}
+
+function activityEntityLabel(activity: MulticaActivity, issueIdentifier: string): string {
+  return `${issueIdentifier} ${activity.action.replace(/_/g, " ")}`;
+}
+
+function shortHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 10);
 }
 
 function normalizeMemories(entries: CogneeRecallEntry[]): RecalledMemory[] {
@@ -424,7 +652,8 @@ function normalizeMemories(entries: CogneeRecallEntry[]): RecalledMemory[] {
       initiativeId: record.initiative_id,
       initiativeIdentifier: record.initiative_identifier,
       entityType: record.entity_type,
-      entityId: record.entity_id,
+      entityIdentifier: record.entity_identifier,
+      entityLabel: record.entity_label,
       authority: record.authority,
       summary: record.summary,
       source: record.source,

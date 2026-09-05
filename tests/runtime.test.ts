@@ -12,12 +12,14 @@ const workspace = "00000000-0000-4000-8000-000000000010";
 const initiative = "00000000-0000-4000-8000-000000000001";
 const issueId = "00000000-0000-4000-8000-000000000002";
 const project = "00000000-0000-4000-8000-000000000011";
-const parent = "00000000-0000-4000-8000-000000000012";
 const task = "00000000-0000-4000-8000-000000000003";
 const run = "00000000-0000-4000-8000-000000000004";
+const activityA = "00000000-0000-4000-8000-000000000101";
+const activityB = "00000000-0000-4000-8000-000000000102";
 
 function resolution(overrides: Partial<InitiativeResolution> = {}): InitiativeResolution {
   return {
+    workspace: { id: workspace, name: "BRWSR", slug: "brwsr" },
     issue: {
       id: issueId, workspace_id: workspace, identifier: "B-185", title: "Current issue",
       status: "in_progress", status_category: "in_progress", parent_issue_id: initiative,
@@ -28,6 +30,12 @@ function resolution(overrides: Partial<InitiativeResolution> = {}): InitiativeRe
       status: "in_progress", status_category: "in_progress", parent_issue_id: null,
       project_id: project, stage: null,
     },
+    parent: {
+      id: initiative, workspace_id: workspace, identifier: "B-184", title: "Initiative",
+      status: "in_progress", status_category: "in_progress", parent_issue_id: null,
+      project_id: project, stage: null,
+    },
+    project: { id: project, workspace_id: workspace, title: "Devbox" },
     chain: [issueId, initiative],
     ...overrides,
   };
@@ -55,16 +63,20 @@ function memory(identifier: string, id: string): MemoryRecord {
     schema_version: SCHEMA_VERSION,
     extraction_prompt_version: EXTRACTION_PROMPT_VERSION,
     workspace_id: workspace,
+    workspace_identifier: "brwsr",
+    workspace_name: "BRWSR",
     initiative_id: id,
     initiative_identifier: identifier,
     issue_id: id,
+    issue_identifier: identifier,
     entity_type: "Decision",
     authority: "confirmed",
-    entity_id: `decision:${identifier}`,
+    entity_identifier: `decision:${identifier}`,
+    entity_label: `Decision for ${identifier}`,
     summary: `Decision for ${identifier}.`,
     relations: [],
     node_sets: [`initiative:${identifier}`, "type:decision", "authority:confirmed"],
-    source: `multica://issues/${id}`,
+    source: `multica://issues/${identifier}`,
     observed_at: "2026-09-04T09:00:00.000Z",
   };
 }
@@ -94,24 +106,30 @@ describe("Workgraph workspace runtime", () => {
     instance.lockInitiative(resolved);
     expect(instance.scope).toMatchObject({
       workspaceId: workspace,
+      workspaceIdentifier: "brwsr",
+      workspaceName: "BRWSR",
       initiativeId: initiative,
       initiativeIdentifier: "B-184",
-      dataset: `workgraph-workspace-${workspace}`,
+      dataset: "workgraph-workspace-brwsr",
       issueId,
+      issueIdentifier: "B-185",
     });
     const remembered = await instance.remember({
-      entityType: "Decision", entityId: "decision:stable", authority: "confirmed",
+      entityType: "Decision", entityIdentifier: "decision:stable", entityLabel: "Stable decision", authority: "confirmed",
       summary: "Keep one stable identity.", source: "test://source",
     });
     expect(remembered.memoryRecord).toMatchObject({
-      entity_id: "decision:stable",
+      entity_identifier: "decision:stable",
+      entity_label: "Stable decision",
       workspace_id: workspace,
+      workspace_identifier: "brwsr",
       initiative_id: initiative,
       initiative_identifier: "B-184",
       issue_id: issueId,
+      issue_identifier: "B-185",
       node_sets: [
         "initiative:B-184", "type:decision", "authority:confirmed",
-        `project:${project}`, `stage:${initiative}-2`,
+        "project:devbox-00000000", "stage:B-184-2",
       ],
     });
     expect(multica.resolveIssue).toHaveBeenCalledOnce();
@@ -176,10 +194,10 @@ describe("Workgraph workspace runtime", () => {
 
     expect(context.memory.initiative?.map((item) => item.initiativeIdentifier)).toEqual(["B-184"]);
     expect(context.memory.workspace?.map((item) => item.initiativeIdentifier)).toEqual(["B-100"]);
-    expect(recall).toHaveBeenNthCalledWith(1, "related decision", `workgraph-workspace-${workspace}`, {
+    expect(recall).toHaveBeenNthCalledWith(1, "related decision", "workgraph-workspace-brwsr", {
       topK: 8, nodeNames: ["initiative:B-184"], signal: undefined,
     });
-    expect(recall).toHaveBeenNthCalledWith(2, "related decision", `workgraph-workspace-${workspace}`, {
+    expect(recall).toHaveBeenNthCalledWith(2, "related decision", "workgraph-workspace-brwsr", {
       topK: 20, signal: undefined,
     });
     instance.outbox.close();
@@ -194,6 +212,37 @@ describe("Workgraph workspace runtime", () => {
     const instance = runtime({ multica });
     instance.lockInitiative(resolution());
     await expect(instance.context("query")).rejects.toThrow("root changed");
+    instance.outbox.close();
+  });
+
+  it("fails closed when refreshed Multica changes the locked issue identity", async () => {
+    const changed = resolution({
+      issue: { ...resolution().issue, identifier: "B-999" },
+    });
+    const multica = new MulticaReader({ run: vi.fn() });
+    multica.resolveIssue = vi.fn(async () => changed);
+    const instance = runtime({ multica });
+    instance.lockInitiative(resolution());
+    await expect(instance.context("query")).rejects.toThrow("scope changed");
+    instance.outbox.close();
+  });
+
+  it("fails closed when a real Multica refresh changes the workspace slug", async () => {
+    const resolved = resolution();
+    let workspaceReads = 0;
+    const multica = new MulticaReader({ run: async (_command, args) => {
+      if (args[0] === "workspace") {
+        workspaceReads += 1;
+        return { ...resolved.workspace, slug: workspaceReads === 1 ? "brwsr" : "brwsr-renamed" };
+      }
+      if (args.includes("project")) return resolved.project!;
+      const requested = args[args.indexOf("get") + 1];
+      return requested === issueId ? resolved.issue : resolved.root;
+    } });
+    const instance = runtime({ multica });
+    instance.lockInitiative(await multica.resolveIssue(issueId, workspace));
+
+    await expect(instance.context("query")).rejects.toThrow("scope changed");
     instance.outbox.close();
   });
 
@@ -218,6 +267,7 @@ describe("Workgraph workspace runtime", () => {
   it("does not derive a stage NodeSet for a root issue", () => {
     const rootResolution = resolution({
       issue: { ...resolution().root, stage: 1 },
+      parent: undefined,
       chain: [initiative],
     });
     const instance = runtime();
@@ -237,15 +287,18 @@ describe("Workgraph workspace runtime", () => {
     const first: MemoryRecord = {
       ...memory("B-184", initiative),
       issue_id: issueId,
+      issue_identifier: "B-185",
       project_id: project,
+      project_identifier: "devbox-00000000",
       parent_issue_id: initiative,
+      parent_issue_identifier: "B-184",
       stage: 2,
       node_sets: [
         "initiative:B-184", "type:decision", "authority:confirmed",
-        `project:${project}`, `stage:${initiative}-2`,
+        "project:devbox-00000000", "stage:B-184-2",
       ],
     };
-    const second = { ...first, entity_id: "decision:B-184:second" };
+    const second = { ...first, entity_identifier: "decision:B-184:second" };
     instance.append("decision_recorded", first.summary, first.source, first.authority, first);
     instance.append("decision_recorded", second.summary, second.source, second.authority, second);
 
@@ -262,7 +315,7 @@ describe("Workgraph workspace runtime", () => {
       env: { XDG_DATA_HOME: dataHome },
       multica: new MulticaReader({ run: vi.fn() }),
     });
-    expect(instance.outbox.path).toBe(join(dataHome, "workgraph", "workgraph-workspace.db"));
+    expect(instance.outbox.path).toBe(join(dataHome, "workgraph", "workgraph-workspace-v3.db"));
     instance.outbox.close();
   });
 
@@ -274,5 +327,215 @@ describe("Workgraph workspace runtime", () => {
     await expect(instance.flush()).resolves.toEqual({ delivered: 0, failed: 0 });
     await expect(shutdown).resolves.toBeUndefined();
     await expect(instance.shutdown()).resolves.toBeUndefined();
+  });
+
+  it("baselines existing Multica activity and captures each new server event once", async () => {
+    const resolved = resolution();
+    const first = {
+      id: activityA, type: "activity" as const, action: "created", actor_id: initiative, actor_type: "member",
+      created_at: "2026-09-04T10:00:00Z", details: {},
+    };
+    const second = {
+      id: activityB, type: "activity" as const, action: "status_changed", actor_id: "", actor_type: "system",
+      created_at: "2026-09-04T10:00:01Z",
+      details: { from: "in_progress", to: "done", unrestricted: "must not be copied" },
+    };
+    const multica = new MulticaReader({ run: vi.fn() });
+    multica.resolveIssue = vi.fn(async () => resolved);
+    multica.issueActivities = vi.fn()
+      .mockResolvedValueOnce({ activities: [first], truncated: false })
+      .mockResolvedValue({ activities: [first, second], truncated: false });
+    const instance = runtime({ multica });
+    instance.lockInitiative(resolved);
+
+    await expect(instance.reconcileActivity()).resolves.toBe(0);
+    await expect(instance.reconcileActivity()).resolves.toBe(1);
+    await expect(instance.reconcileActivity()).resolves.toBe(0);
+
+    const captured = instance.timeline().filter((event) => event.eventId === `multica-activity:${activityB}`);
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toMatchObject({
+      timestamp: second.created_at,
+      source: "multica://issues/B-185/activity",
+      sourceRevision: activityB,
+      boundedSummary: "Multica issue B-185: Status changed from in_progress to done. Actor type: system.",
+      authority: "observed",
+    });
+    expect(captured[0].boundedSummary).not.toContain("must not be copied");
+    expect(captured[0].memoryRecord).toMatchObject({
+      entity_identifier: expect.stringMatching(/^evidence-status-changed:B-185:20260904T100001Z:[a-f0-9]{10}$/),
+      entity_label: "B-185 status changed",
+      observed_at: second.created_at,
+    });
+    instance.outbox.close();
+  });
+
+  it("does not advance past a truncated timeline that lost the stored cursor", async () => {
+    const resolved = resolution();
+    const first = {
+      id: activityA, type: "activity" as const, action: "created", actor_id: "", actor_type: "system",
+      created_at: "2026-09-04T10:00:00Z", details: {},
+    };
+    const later = {
+      id: activityB, type: "activity" as const, action: "task_completed", actor_id: "", actor_type: "system",
+      created_at: "2026-09-04T10:00:02Z", details: {},
+    };
+    const multica = new MulticaReader({ run: vi.fn() });
+    multica.resolveIssue = vi.fn(async () => resolved);
+    multica.issueActivities = vi.fn()
+      .mockResolvedValueOnce({ activities: [first], truncated: false })
+      .mockResolvedValueOnce({ activities: [later], truncated: true });
+    const instance = runtime({ multica });
+    instance.lockInitiative(resolved);
+    await instance.reconcileActivity();
+
+    await expect(instance.reconcileActivity()).rejects.toThrow("truncated without overlap");
+    expect(instance.outbox.hasSeenActivity(workspace, issueId, activityA)).toBe(true);
+    expect(instance.outbox.hasSeenActivity(workspace, issueId, activityB)).toBe(false);
+    expect(instance.timeline().some((event) => event.eventId === `multica-activity:${activityB}`)).toBe(false);
+    instance.outbox.close();
+  });
+
+  it("does not lose a new activity with the same second and a smaller UUID", async () => {
+    const resolved = resolution();
+    const largerId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+    const smallerId = "00000000-0000-4000-8000-000000000100";
+    const baseline = {
+      id: largerId, type: "activity" as const, action: "created", actor_id: "", actor_type: "system",
+      created_at: "2026-09-04T10:00:00Z", details: {},
+    };
+    const next = {
+      id: smallerId, type: "activity" as const, action: "status_changed", actor_id: "", actor_type: "system",
+      created_at: "2026-09-04T10:00:00Z", details: { from: "backlog", to: "in_progress" },
+    };
+    const multica = new MulticaReader({ run: vi.fn() });
+    multica.resolveIssue = vi.fn(async () => resolved);
+    multica.issueActivities = vi.fn()
+      .mockResolvedValueOnce({ activities: [baseline], truncated: false })
+      .mockResolvedValueOnce({ activities: [baseline, next], truncated: false });
+    const instance = runtime({ multica });
+    instance.lockInitiative(resolved);
+    await instance.reconcileActivity();
+
+    await expect(instance.reconcileActivity()).resolves.toBe(1);
+    expect(instance.timeline().some((event) => event.eventId === `multica-activity:${smallerId}`)).toBe(true);
+    instance.outbox.close();
+  });
+
+  it("fails closed when an empty baseline has no overlap with a later truncated window", async () => {
+    const resolved = resolution();
+    const multica = new MulticaReader({ run: vi.fn() });
+    multica.resolveIssue = vi.fn(async () => resolved);
+    multica.issueActivities = vi.fn()
+      .mockResolvedValueOnce({ activities: [], truncated: false })
+      .mockResolvedValueOnce({ activities: [{
+        id: activityA, type: "activity", action: "created", actor_id: "", actor_type: "system",
+        created_at: "2026-09-04T10:00:00Z", details: {},
+      }], truncated: true });
+    const instance = runtime({ multica });
+    instance.lockInitiative(resolved);
+    await instance.reconcileActivity();
+
+    await expect(instance.reconcileActivity()).rejects.toThrow("truncated without overlap");
+    expect(instance.outbox.hasSeenActivity(workspace, issueId, activityA)).toBe(false);
+    instance.outbox.close();
+  });
+
+  it("does not silently re-baseline after startup reconciliation fails", async () => {
+    const path = join(mkdtempSync(join(tmpdir(), "workgraph-failed-baseline-")), "outbox.db");
+    const resolved = resolution();
+    const multica = new MulticaReader({ run: vi.fn() });
+    multica.resolveIssue = vi.fn(async () => resolved);
+    multica.issueActivities = vi.fn()
+      .mockRejectedValueOnce(new Error("Multica unavailable"))
+      .mockResolvedValueOnce({ activities: [{
+        id: activityA, type: "activity", action: "created", actor_id: "", actor_type: "system",
+        created_at: "2026-09-04T10:00:00Z", details: {},
+      }], truncated: false });
+    const instance = new WorkgraphRuntime({
+      outbox: new WorkgraphOutbox(path), env: { MULTICA_WORKSPACE_ID: workspace }, multica,
+    });
+    instance.lockInitiative(resolved);
+
+    await expect(instance.reconcileActivity()).rejects.toThrow("Multica unavailable");
+    await expect(instance.reconcileActivity()).rejects.toThrow("operator recovery");
+    expect(instance.outbox.hasActivityBaseline(workspace, issueId)).toBe(false);
+    instance.outbox.close();
+
+    const restarted = new WorkgraphRuntime({
+      outbox: new WorkgraphOutbox(path), env: { MULTICA_WORKSPACE_ID: workspace }, multica,
+    });
+    restarted.lockInitiative(resolved);
+    await expect(restarted.reconcileActivity()).rejects.toThrow("operator recovery");
+    restarted.outbox.close();
+  });
+
+  it("does not import a stale snapshot when another process wins baseline initialization", async () => {
+    const path = join(mkdtempSync(join(tmpdir(), "workgraph-race-")), "outbox.db");
+    const resolved = resolution();
+    let releaseStale!: (value: { activities: any[]; truncated: boolean }) => void;
+    const staleRead = new Promise<{ activities: any[]; truncated: boolean }>((resolve) => { releaseStale = resolve; });
+    const staleMultica = new MulticaReader({ run: vi.fn() });
+    staleMultica.resolveIssue = vi.fn(async () => resolved);
+    staleMultica.issueActivities = vi.fn(async () => staleRead);
+    const currentMultica = new MulticaReader({ run: vi.fn() });
+    currentMultica.resolveIssue = vi.fn(async () => resolved);
+    currentMultica.issueActivities = vi.fn(async () => ({ activities: [{
+      id: activityB, type: "activity" as const, action: "status_changed", actor_id: "", actor_type: "system",
+      created_at: "2026-09-04T10:00:01Z", details: { from: "backlog", to: "in_progress" },
+    }], truncated: true }));
+    const stale = new WorkgraphRuntime({
+      outbox: new WorkgraphOutbox(path), env: { MULTICA_WORKSPACE_ID: workspace }, multica: staleMultica,
+    });
+    const current = new WorkgraphRuntime({
+      outbox: new WorkgraphOutbox(path), env: { MULTICA_WORKSPACE_ID: workspace }, multica: currentMultica,
+    });
+    stale.lockInitiative(resolved);
+    current.lockInitiative(resolved);
+
+    const staleOperation = stale.reconcileActivity();
+    await current.reconcileActivity();
+    releaseStale({ activities: [{
+      id: activityA, type: "activity", action: "created", actor_id: "", actor_type: "system",
+      created_at: "2026-09-04T10:00:00Z", details: {},
+    }], truncated: true });
+    await expect(staleOperation).resolves.toBe(0);
+
+    expect(stale.timeline().some((event) => event.eventId === `multica-activity:${activityA}`)).toBe(false);
+    stale.outbox.close();
+    current.outbox.close();
+  });
+
+  it("drains more than one delivery batch before shutdown closes SQLite", async () => {
+    const resolved = resolution();
+    const remember = vi.fn(async () => ({ status: "completed" }));
+    const multica = new MulticaReader({ run: vi.fn() });
+    multica.resolveIssue = vi.fn(async () => resolved);
+    multica.issueActivities = vi.fn(async () => ({ activities: [], truncated: false }));
+    const instance = runtime({ multica, cognee: { recall: vi.fn(), remember } as unknown as CogneeApiClient });
+    instance.lockInitiative(resolved);
+    instance.outbox.initializeActivityBaseline(workspace, issueId, []);
+    for (let index = 0; index < 30; index += 1) {
+      const record: MemoryRecord = {
+        ...memory("B-184", initiative),
+        issue_id: issueId,
+        issue_identifier: "B-185",
+        project_id: project,
+        project_identifier: "devbox-00000000",
+        parent_issue_id: initiative,
+        parent_issue_identifier: "B-184",
+        stage: 2,
+        entity_identifier: `decision:shutdown:${index}`,
+        node_sets: [
+          "initiative:B-184", "type:decision", "authority:confirmed",
+          "project:devbox-00000000", "stage:B-184-2",
+        ],
+      };
+      instance.append("decision_recorded", record.summary, record.source, record.authority, record);
+    }
+
+    await instance.shutdown();
+
+    expect(remember).toHaveBeenCalledTimes(30);
   });
 });

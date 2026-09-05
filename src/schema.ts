@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 
-export const SCHEMA_VERSION = "2.0.0" as const;
-export const EXTRACTION_PROMPT_VERSION = "1.0.0" as const;
+export const SCHEMA_VERSION = "3.0.0" as const;
+export const EXTRACTION_PROMPT_VERSION = "2.0.0" as const;
 export const EXTRACTION_PROMPT = `Extract only the bounded Workgraph entity and relation types in schema ${SCHEMA_VERSION}.
-Preserve stable entity identifiers, source provenance, observation time, and authority exactly as supplied.
+Use entity_label, bounded summaries, and *_identifier fields for concise human-readable node names.
+Treat *_id UUIDs, source_revision, hashes, timestamps, and source URLs as opaque provenance attributes; never use them as node display names.
+Preserve stable semantic identifiers, source provenance, observation time, and authority exactly as supplied.
 Do not invent current state, identifiers, relations, or authority. Treat remembered summaries as historical context.
 Entity types: Initiative, Issue, Task, Agent, Squad, Decision, Constraint, Risk, Blocker, Handoff, Artifact, Evidence, Run, Outcome, Conflict.
 Relation types: root_of, child_of, part_of, assigned_to, owned_by, delegated_to, blocked_by, depends_on, produced, supports, contradicts, derived_from, about, verified_by, resulted_in, observed_in, related_to.`;
@@ -38,16 +40,25 @@ export const EventTypeSchema = z.enum(EVENT_TYPES);
 
 const UuidSchema = z.string().uuid();
 const StructuredIdentifierSchema = z.string().trim().min(1).max(256);
+const FullUuidPattern = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const ReadableIdentifierSchema = StructuredIdentifierSchema.refine(
+  (value) => !FullUuidPattern.test(value),
+  "Readable identifiers must not contain internal UUIDs",
+);
+const SemanticIdentifierSchema = z.string().trim().min(1).max(512).refine(
+  (value) => !FullUuidPattern.test(value),
+  "Semantic identifiers must not contain internal UUIDs",
+);
 const NodeSetSchema = z.string().min(3).max(128).regex(
   /^(?:initiative|type|authority|project|stage|repo):[A-Za-z0-9](?:[A-Za-z0-9._-]{0,95})$/,
-);
+).refine((value) => !FullUuidPattern.test(value), "NodeSets must not contain internal UUIDs");
 
 export interface NodeSetScope {
   initiativeIdentifier: string;
   entityType: NodeType;
   authority: Authority;
-  projectId?: string | null;
-  parentIssueId?: string | null;
+  projectIdentifier?: string | null;
+  parentIssueIdentifier?: string | null;
   stage?: number | null;
   repositoryIdentifier?: string | null;
 }
@@ -61,12 +72,12 @@ export function deriveNodeSets(scope: NodeSetScope): string[] {
     `type:${normalizeNodeSetValue(entityType.toLowerCase())}`,
     `authority:${normalizeNodeSetValue(authority)}`,
   ];
-  if (scope.projectId != null) {
-    nodeSets.push(`project:${normalizeNodeSetValue(UuidSchema.parse(scope.projectId).toLowerCase())}`);
+  if (scope.projectIdentifier != null) {
+    nodeSets.push(`project:${normalizeNodeSetValue(scope.projectIdentifier)}`);
   }
-  if (scope.stage != null && scope.parentIssueId != null) {
-    const parentIssueId = UuidSchema.parse(scope.parentIssueId).toLowerCase();
-    nodeSets.push(`stage:${parentIssueId}-${z.number().int().positive().parse(scope.stage)}`);
+  if (scope.stage != null && scope.parentIssueIdentifier != null) {
+    const parentIssueIdentifier = normalizeNodeSetValue(scope.parentIssueIdentifier);
+    nodeSets.push(`stage:${parentIssueIdentifier}-${z.number().int().positive().parse(scope.stage)}`);
   }
   if (scope.repositoryIdentifier != null) {
     nodeSets.push(`repo:${normalizeNodeSetValue(scope.repositoryIdentifier)}`);
@@ -76,39 +87,65 @@ export function deriveNodeSets(scope: NodeSetScope): string[] {
 
 export const RelationSchema = z.object({
   type: EdgeTypeSchema,
-  target: z.string().trim().min(1).max(512),
+  target: SemanticIdentifierSchema,
 }).strict();
 
 export const MemoryRecordSchema = z.object({
   schema_version: z.literal(SCHEMA_VERSION),
   extraction_prompt_version: z.literal(EXTRACTION_PROMPT_VERSION),
   workspace_id: UuidSchema,
+  workspace_identifier: ReadableIdentifierSchema,
+  workspace_name: StructuredIdentifierSchema.optional(),
   initiative_id: UuidSchema,
-  initiative_identifier: StructuredIdentifierSchema,
+  initiative_identifier: ReadableIdentifierSchema,
   issue_id: UuidSchema,
+  issue_identifier: ReadableIdentifierSchema,
   entity_type: NodeTypeSchema,
   authority: AuthoritySchema,
-  entity_id: z.string().trim().min(1).max(512),
+  entity_identifier: SemanticIdentifierSchema,
+  entity_label: z.string().trim().min(1).max(256).refine(
+    (value) => !FullUuidPattern.test(value),
+    "Entity labels must not contain internal UUIDs",
+  ),
   summary: z.string().trim().min(1).max(4000),
   relations: z.array(RelationSchema).max(25).default([]),
   node_sets: z.array(NodeSetSchema).min(3).max(6),
   project_id: UuidSchema.nullish(),
+  project_identifier: ReadableIdentifierSchema.nullish(),
   parent_issue_id: UuidSchema.nullish(),
+  parent_issue_identifier: ReadableIdentifierSchema.nullish(),
   stage: z.number().int().positive().nullish(),
-  repository_identifier: StructuredIdentifierSchema.nullish(),
+  repository_identifier: ReadableIdentifierSchema.nullish(),
   source: z.string().trim().min(1).max(1000),
   source_revision: z.string().max(256).optional(),
   observed_at: z.string().datetime({ offset: true }),
 }).strict().superRefine((record, context) => {
-  const expected = deriveNodeSets({
-    initiativeIdentifier: record.initiative_identifier,
-    entityType: record.entity_type,
-    authority: record.authority,
-    projectId: record.project_id,
-    parentIssueId: record.parent_issue_id,
-    stage: record.stage,
-    repositoryIdentifier: record.repository_identifier,
-  });
+  for (const [idField, identifierField] of [
+    ["project_id", "project_identifier"],
+    ["parent_issue_id", "parent_issue_identifier"],
+  ] as const) {
+    if ((record[idField] == null) !== (record[identifierField] == null)) {
+      context.addIssue({
+        code: "custom",
+        path: [identifierField],
+        message: `${idField} and ${identifierField} must be provided together`,
+      });
+    }
+  }
+  let expected: string[];
+  try {
+    expected = deriveNodeSets({
+      initiativeIdentifier: record.initiative_identifier,
+      entityType: record.entity_type,
+      authority: record.authority,
+      projectIdentifier: record.project_identifier,
+      parentIssueIdentifier: record.parent_issue_identifier,
+      stage: record.stage,
+      repositoryIdentifier: record.repository_identifier,
+    });
+  } catch {
+    return;
+  }
   if (record.node_sets.length !== expected.length || record.node_sets.some((value, index) => value !== expected[index])) {
     context.addIssue({
       code: "custom",
@@ -137,6 +174,7 @@ export interface WorkgraphEventInput {
   initiativeId: string;
   initiativeIdentifier: string;
   issueId: string;
+  issueIdentifier: string;
   projectId?: string;
   nodeSets: string[];
   schemaVersion: string;
@@ -163,7 +201,8 @@ export function createEvent(input: WorkgraphEventInput): WorkgraphEvent {
   UuidSchema.parse(input.initiativeId);
   UuidSchema.parse(input.issueId);
   if (input.projectId) UuidSchema.parse(input.projectId);
-  StructuredIdentifierSchema.parse(input.initiativeIdentifier);
+  ReadableIdentifierSchema.parse(input.initiativeIdentifier);
+  ReadableIdentifierSchema.parse(input.issueIdentifier);
   z.array(NodeSetSchema).min(3).max(6).parse(input.nodeSets);
   z.literal(SCHEMA_VERSION).parse(input.schemaVersion);
   z.literal(EXTRACTION_PROMPT_VERSION).parse(input.extractionPromptVersion);
@@ -173,6 +212,7 @@ export function createEvent(input: WorkgraphEventInput): WorkgraphEvent {
       || record.initiative_id !== input.initiativeId
       || record.initiative_identifier !== input.initiativeIdentifier
       || record.issue_id !== input.issueId
+      || record.issue_identifier !== input.issueIdentifier
       || (record.project_id ?? undefined) !== input.projectId
       || record.schema_version !== input.schemaVersion
       || record.extraction_prompt_version !== input.extractionPromptVersion
@@ -187,6 +227,7 @@ export function createEvent(input: WorkgraphEventInput): WorkgraphEvent {
     initiativeId: input.initiativeId,
     initiativeIdentifier: input.initiativeIdentifier,
     issueId: input.issueId,
+    issueIdentifier: input.issueIdentifier,
     projectId: input.projectId ?? null,
     nodeSets: input.nodeSets,
     schemaVersion: input.schemaVersion,
@@ -210,8 +251,9 @@ export function createEvent(input: WorkgraphEventInput): WorkgraphEvent {
   };
 }
 
-export function datasetForWorkspace(workspaceId: string): string {
-  return `workgraph-workspace-${UuidSchema.parse(workspaceId).toLowerCase()}`;
+export function datasetForWorkspace(workspaceIdentifier: string): string {
+  ReadableIdentifierSchema.parse(workspaceIdentifier);
+  return `workgraph-workspace-${normalizeNodeSetValue(workspaceIdentifier).toLowerCase()}`;
 }
 
 export function boundText(value: string, maximum: number): string {
@@ -224,7 +266,7 @@ export function initiativeNodeSet(identifier: string): string {
 }
 
 function normalizeNodeSetValue(value: string): string {
-  const original = StructuredIdentifierSchema.parse(value);
+  const original = ReadableIdentifierSchema.parse(value);
   const normalized = original
     .normalize("NFKD")
     .replace(/[^A-Za-z0-9._-]+/g, "-")
