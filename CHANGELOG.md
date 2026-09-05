@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Bootstrap a fresh verified workspace chat with one bounded Cognee recall while
+  keeping resumed chat messages on explicit, read-only recall.
 - Put readable issue IDs first in the interactive selector and show the current
   normalized project title when the initiative belongs to a project.
 - Use the current Multica profile workspace for interactive Pi selection when

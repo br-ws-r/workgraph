@@ -14,6 +14,7 @@ export function createWorkgraphExtension(options: WorkgraphPiOptions = {}) {
     const runtime = options.runtimeFactory?.() ?? new WorkgraphRuntime(options);
     let started = false;
     let workspaceChat = false;
+    let bootstrapWorkspaceChat = false;
 
     pi.registerFlag("initiative", {
       description: "Use a root Multica issue identifier such as B-184 (UUID also accepted for diagnostics)",
@@ -21,11 +22,15 @@ export function createWorkgraphExtension(options: WorkgraphPiOptions = {}) {
     });
 
     pi.on("session_start", async (_event, ctx) => {
-      if (started) return;
+      if (started) {
+        if (workspaceChat) bootstrapWorkspaceChat = isFreshSession(ctx);
+        return;
+      }
       started = true;
       try {
         workspaceChat = Boolean(runtime.env.MULTICA_TASK_ID?.trim() && runtime.env.MULTICA_AGENT_ID?.trim())
           && await runtime.multica.isCurrentChat();
+        bootstrapWorkspaceChat = workspaceChat && isFreshSession(ctx);
         let resolution = workspaceChat
           ? undefined
           : await resolveFromEnvironment(runtime.multica, runtime.env, stringFlag(pi.getFlag("initiative")));
@@ -51,6 +56,17 @@ export function createWorkgraphExtension(options: WorkgraphPiOptions = {}) {
       try {
         if (!runtime.scope) {
           if (!workspaceChat) return undefined;
+          if (bootstrapWorkspaceChat) {
+            bootstrapWorkspaceChat = false;
+            const context = await runtime.workspaceContext(event.prompt, 8, ctx.signal);
+            const workspaceMemory = boundText(JSON.stringify(publicMemories(context.memory)), 9000);
+            const memoryStatus = context.memoryError
+              ? "Cognee bootstrap recall unavailable."
+              : "Cognee bootstrap recall completed for this fresh session.";
+            return {
+              systemPrompt: `${event.systemPrompt}\n\n## Workgraph workspace chat\nNo initiative is selected. Verified workspace: ${context.workspace.name} (${context.workspace.slug}).\n\nMemory status:\n${memoryStatus}\n\nNon-authoritative related workspace memory (Cognee; each item identifies its initiative and provenance):\n${workspaceMemory}\n\nAdditional read-only workspace recall is available through initiative_memory_recall with workspace scope. Do not write Workgraph memory or infer current workflow state from recalled memory.`,
+            };
+          }
           return {
             systemPrompt: `${event.systemPrompt}\n\n## Workgraph workspace chat\nNo initiative is selected. Read-only workspace memory is available on demand through initiative_memory_recall with workspace scope. Use it only when prior workspace context could materially help. Do not write Workgraph memory or infer current workflow state from recalled memory.`,
           };
@@ -252,6 +268,11 @@ function selectorProjectLabel(title: string): string {
 
 function stringFlag(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isFreshSession(ctx: { sessionManager: { buildContextEntries(): Array<{ type: string }> } }): boolean {
+  return !ctx.sessionManager.buildContextEntries()
+    .some((entry) => ["message", "custom_message", "compaction", "branch_summary"].includes(entry.type));
 }
 
 function publicMemories(memories: Array<{
