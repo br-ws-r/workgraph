@@ -121,10 +121,23 @@ describe("Multica v0.4.35 initiative resolution", () => {
     }
   });
 
-  it("requires a valid workspace for every environment resolution", async () => {
+  it("requires a workspace only for managed resolution", async () => {
     const reader = new MulticaReader({ run: vi.fn() });
-    await expect(resolveFromEnvironment(reader, {})).rejects.toThrow("MULTICA_WORKSPACE_ID is required");
-    await expect(resolveFromEnvironment(reader, { MULTICA_WORKSPACE_ID: "workspace" })).rejects.toThrow();
+    await expect(resolveFromEnvironment(reader, {})).resolves.toBeUndefined();
+    await expect(resolveFromEnvironment(reader, {
+      MULTICA_TASK_ID: task, MULTICA_AGENT_ID: agent,
+    })).rejects.toThrow("MULTICA_WORKSPACE_ID is required");
+    await expect(resolveFromEnvironment(reader, {
+      MULTICA_WORKSPACE_ID: "workspace", MULTICA_TASK_ID: task, MULTICA_AGENT_ID: agent,
+    })).rejects.toThrow();
+  });
+
+  it("uses the current Multica workspace for an interactive initiative", async () => {
+    const run = vi.fn(async (_command: string, args: string[]) => resolvedValue(args, () => issue(root)));
+    const resolved = await resolveFromEnvironment(new MulticaReader({ run }), {}, "B-184");
+
+    expect(resolved?.workspace.slug).toBe("brwsr");
+    expect(run).toHaveBeenNthCalledWith(1, "multica", ["workspace", "get", "--output", "json"]);
   });
 
   it("gives managed task provenance precedence and checks MULTICA_ISSUE_ID", async () => {

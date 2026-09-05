@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Use the current Multica profile workspace for interactive Pi selection when
+  `MULTICA_WORKSPACE_ID` is absent; keep the variable required for managed runs.
 - Introduce schema v3 readable workspace, issue, project, entity, relation, and
   NodeSet identifiers while retaining UUIDs only as internal provenance.
 - Use `workgraph-workspace-<workspace-slug>` datasets and a clean
