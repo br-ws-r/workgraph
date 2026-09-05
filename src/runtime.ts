@@ -1,8 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { CogneeApiClient, createCogneeClientFromEnv, type CogneeRecallEntry } from "./cognee.js";
-import { MulticaReader, type InitiativeResolution, type MulticaActivity } from "./multica.js";
+import {
+  CogneeApiClient,
+  createCogneeClientFromEnv,
+  type CogneeRecallEntry,
+  type CogneeRecallOptions,
+} from "./cognee.js";
+import {
+  MulticaReader,
+  type InitiativeResolution,
+  type MulticaActivity,
+  type MulticaWorkspace,
+} from "./multica.js";
 import { WorkgraphOutbox, type TimelineEntry } from "./outbox.js";
 import {
   EXTRACTION_PROMPT_VERSION,
@@ -63,6 +73,12 @@ export interface WorkgraphRecall {
 export interface WorkgraphContext {
   resolution: InitiativeResolution;
   memory: WorkgraphRecall;
+  memoryError?: string;
+}
+
+export interface WorkgraphWorkspaceContext {
+  workspace: MulticaWorkspace;
+  memory: RecalledMemory[];
   memoryError?: string;
 }
 
@@ -258,6 +274,32 @@ export class WorkgraphRuntime {
     }
   }
 
+  async workspaceContext(query: string, topK = 8, signal?: AbortSignal): Promise<WorkgraphWorkspaceContext> {
+    const workspaceId = this.env.MULTICA_WORKSPACE_ID?.trim();
+    if (!workspaceId) throw new Error("MULTICA_WORKSPACE_ID is required for workspace recall");
+    const workspace = await this.multica.workspace(workspaceId);
+    const boundedTopK = Math.min(20, Math.max(1, Math.trunc(topK)));
+    try {
+      if (!this.cognee) throw new Error("Cognee is not configured");
+      const memories = await recallValidMemories(
+        this.cognee,
+        boundText(query, 2000),
+        datasetForWorkspace(workspace.slug),
+        { topK: boundedTopK, signal },
+      );
+      return {
+        workspace,
+        memory: memories.filter((record) => record.workspaceId === workspace.id.toLowerCase()).slice(0, boundedTopK),
+      };
+    } catch (error) {
+      return {
+        workspace,
+        memory: [],
+        memoryError: boundText(error instanceof Error ? error.message : String(error), 500),
+      };
+    }
+  }
+
   async recall(
     query: string,
     scope: RecallScope = "initiative",
@@ -411,22 +453,22 @@ export class WorkgraphRuntime {
     const activeInitiativeNodeSet = initiativeNodeSet(this.#scope.initiativeIdentifier);
     const result: WorkgraphRecall = {};
     if (scope === "initiative" || scope === "both") {
-      const entries = await this.cognee.recall(boundedQuery, this.#scope.dataset, {
+      const memories = await recallValidMemories(this.cognee, boundedQuery, this.#scope.dataset, {
         topK: boundedTopK,
         nodeNames: [activeInitiativeNodeSet],
         signal,
       });
-      result.initiative = normalizeMemories(entries)
+      result.initiative = memories
         .filter((record) => record.workspaceId === this.#scope!.workspaceId
           && record.initiativeId === this.#scope!.initiativeId
           && record.initiativeIdentifier === this.#scope!.initiativeIdentifier);
     }
     if (scope === "workspace" || scope === "both") {
-      const entries = await this.cognee.recall(boundedQuery, this.#scope.dataset, {
+      const memories = await recallValidMemories(this.cognee, boundedQuery, this.#scope.dataset, {
         topK: scope === "both" ? Math.min(20, Math.max(12, boundedTopK * 3)) : boundedTopK,
         signal,
       });
-      result.workspace = normalizeMemories(entries)
+      result.workspace = memories
         .filter((record) => record.workspaceId === this.#scope!.workspaceId
           && record.initiativeId !== this.#scope!.initiativeId)
         .slice(0, scope === "both" ? 4 : boundedTopK);
@@ -535,7 +577,10 @@ export class WorkgraphRuntime {
       ),
       entity_label: input.entityLabel ?? `${input.entityType} for ${this.#scope.issueIdentifier}: ${boundText(input.summary, 120)}`,
       summary: boundText(input.summary, 4000),
-      relations: input.relations ?? [{ type: "about", target: `initiative:${this.#scope.initiativeIdentifier}` }],
+      relations: input.relations?.map((relation) => ({
+        ...relation,
+        target: canonicalRelationTarget(relation.target),
+      })) ?? [{ type: "about", target: `initiative:${this.#scope.initiativeIdentifier}` }],
       node_sets: nodeSets,
       source: input.source,
       source_revision: input.sourceRevision,
@@ -659,6 +704,29 @@ function normalizeMemories(entries: CogneeRecallEntry[]): RecalledMemory[] {
     });
   }
   return memories;
+}
+
+async function recallValidMemories(
+  cognee: CogneeApiClient,
+  query: string,
+  dataset: string,
+  options: CogneeRecallOptions,
+): Promise<RecalledMemory[]> {
+  let entries = await cognee.recall(query, dataset, options);
+  let memories = normalizeMemories(entries);
+  if (entries.length > 0 && memories.length === 0) {
+    entries = await cognee.recall(query, dataset, options);
+    memories = normalizeMemories(entries);
+    if (memories.length === 0) {
+      throw new Error("Cognee Recall returned no valid Workgraph records after one retry");
+    }
+  }
+  return memories;
+}
+
+function canonicalRelationTarget(target: string): string {
+  const trimmed = target.trim();
+  return /^[A-Za-z][A-Za-z0-9._-]*-\d+$/.test(trimmed) ? `issue:${trimmed.toUpperCase()}` : trimmed;
 }
 
 function parseMemoryRecord(text: string): MemoryRecord | undefined {

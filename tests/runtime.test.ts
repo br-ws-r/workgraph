@@ -231,6 +231,94 @@ describe("Workgraph workspace runtime", () => {
     instance.outbox.close();
   });
 
+  it("retries one non-record Cognee response and returns verified memory", async () => {
+    const resolved = resolution();
+    const projected = memory("B-184", initiative);
+    const multica = new MulticaReader({ run: vi.fn() });
+    multica.resolveIssue = vi.fn(async () => resolved);
+    const recall = vi.fn()
+      .mockResolvedValueOnce([{
+        source: "graph", kind: "chunk", searchType: "CHUNKS",
+        text: "Acknowledged: B-184.", metadata: {},
+      }])
+      .mockResolvedValueOnce([projectedRecallEntry(projected)]);
+    const instance = runtime({
+      cognee: { recall, remember: vi.fn() } as unknown as CogneeApiClient,
+      multica,
+    });
+    instance.lockInitiative(resolved);
+
+    await expect(instance.recall("decision")).resolves.toMatchObject({
+      initiative: [{ entityIdentifier: "decision:B-184" }],
+    });
+    expect(recall).toHaveBeenCalledTimes(2);
+    instance.outbox.close();
+  });
+
+  it("does not retry a valid empty Cognee response", async () => {
+    const resolved = resolution();
+    const multica = new MulticaReader({ run: vi.fn() });
+    multica.resolveIssue = vi.fn(async () => resolved);
+    const recall = vi.fn(async () => []);
+    const instance = runtime({
+      cognee: { recall, remember: vi.fn() } as unknown as CogneeApiClient,
+      multica,
+    });
+    instance.lockInitiative(resolved);
+
+    await expect(instance.recall("unknown")).resolves.toEqual({ initiative: [] });
+    expect(recall).toHaveBeenCalledOnce();
+    instance.outbox.close();
+  });
+
+  it("reports recall unavailable after two non-record Cognee responses", async () => {
+    const resolved = resolution();
+    const multica = new MulticaReader({ run: vi.fn() });
+    multica.resolveIssue = vi.fn(async () => resolved);
+    const cognee = {
+      recall: vi.fn(async () => [{
+        source: "graph", kind: "chunk", searchType: "CHUNKS",
+        text: "Acknowledged: B-184.", metadata: {},
+      }]),
+      remember: vi.fn(),
+    } as unknown as CogneeApiClient;
+    const instance = runtime({ cognee, multica });
+    instance.lockInitiative(resolved);
+
+    const context = await instance.context("decision");
+
+    expect(context.memory).toEqual({});
+    expect(context.memoryError).toContain("no valid Workgraph records after one retry");
+    expect(cognee.recall).toHaveBeenCalledTimes(2);
+    instance.outbox.close();
+  });
+
+  it("normalizes bare Multica issue relation targets", async () => {
+    const resolved = resolution();
+    const multica = new MulticaReader({ run: vi.fn() });
+    multica.resolveIssue = vi.fn(async () => resolved);
+    const instance = runtime({ multica });
+    instance.lockInitiative(resolved);
+
+    const remembered = await instance.remember({
+      entityType: "Decision", authority: "confirmed", summary: "Canonical targets.", source: "test://source",
+      relations: [
+        { type: "about", target: "b-184" },
+        { type: "related_to", target: "BR2_CORE-7" },
+        { type: "supports", target: "issue:B-185" },
+        { type: "related_to", target: "artifact:release" },
+      ],
+    });
+
+    expect(remembered.memoryRecord?.relations).toEqual([
+      { type: "about", target: "issue:B-184" },
+      { type: "related_to", target: "issue:BR2_CORE-7" },
+      { type: "supports", target: "issue:B-185" },
+      { type: "related_to", target: "artifact:release" },
+    ]);
+    instance.outbox.close();
+  });
+
   it("fails closed when refreshed Multica changes the root", async () => {
     const changed = resolution({
       root: { ...resolution().root, id: "00000000-0000-4000-8000-000000000099", identifier: "B-999" },
@@ -289,6 +377,42 @@ describe("Workgraph workspace runtime", () => {
     expect(context.resolution).toBe(resolved);
     expect(context.memory).toEqual({});
     expect(context.memoryError).toContain("Cognee unavailable");
+    instance.outbox.close();
+  });
+
+  it("recalls workspace memory without selecting an initiative", async () => {
+    const historicalId = "00000000-0000-4000-8000-000000000099";
+    const otherWorkspace = "00000000-0000-4000-8000-000000000020";
+    const multica = new MulticaReader({ run: vi.fn() });
+    multica.workspace = vi.fn(async () => resolution().workspace);
+    const recall = vi.fn(async () => [
+      recallEntry(memory("B-100", historicalId)),
+      recallEntry({ ...memory("B-999", historicalId), workspace_id: otherWorkspace }),
+    ]);
+    const instance = runtime({
+      cognee: { recall, remember: vi.fn() } as unknown as CogneeApiClient,
+      multica,
+    });
+
+    const context = await instance.workspaceContext("OMP status", 4);
+
+    expect(context.workspace.slug).toBe("brwsr");
+    expect(context.memory.map((item) => item.initiativeIdentifier)).toEqual(["B-100"]);
+    expect(recall).toHaveBeenCalledWith("OMP status", "workgraph-workspace-brwsr", {
+      topK: 4, signal: undefined,
+    });
+    expect(instance.scope).toBeUndefined();
+    expect(instance.timeline()).toEqual([]);
+    instance.outbox.close();
+  });
+
+  it("requires an explicit workspace for unscoped recall", async () => {
+    const multica = new MulticaReader({ run: vi.fn() });
+    multica.workspace = vi.fn();
+    const instance = runtime({ env: { MULTICA_WORKSPACE_ID: undefined }, multica });
+
+    await expect(instance.workspaceContext("query")).rejects.toThrow("MULTICA_WORKSPACE_ID is required");
+    expect(multica.workspace).not.toHaveBeenCalled();
     instance.outbox.close();
   });
 

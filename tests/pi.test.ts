@@ -67,6 +67,7 @@ function fakeRuntime() {
     cognee: {},
     multica: {
       workspace: vi.fn(async () => resolved.workspace),
+      isCurrentChat: vi.fn(async () => false),
       project: vi.fn(),
       resolveIssue: vi.fn(), resolveTask: vi.fn(), recentRootInitiatives: vi.fn(),
     },
@@ -87,6 +88,14 @@ function fakeRuntime() {
           observedAt: "2026-08-01T10:00:00.000Z",
         }],
       },
+    })),
+    workspaceContext: vi.fn(async () => ({
+      workspace: resolved.workspace,
+      memory: [{
+        workspaceId: workspace, initiativeId: initiative, initiativeIdentifier: "B-184", entityType: "Decision",
+        entityIdentifier: "decision:workspace", entityLabel: "Workspace decision", authority: "confirmed",
+        summary: "Workspace decision.", source: "test://workspace", observedAt: "2026-09-04T10:00:00.000Z",
+      }],
     })),
     recall: vi.fn(async () => ({ initiative: [] })),
     remember: vi.fn(async () => ({
@@ -166,6 +175,51 @@ describe("Workgraph Pi extension", () => {
 
     expect(result.systemPrompt).toContain("Current issue");
     expect(result.systemPrompt).toContain("Cognee recall unavailable");
+  });
+
+  it("injects read-only workspace memory into an unscoped chat", async () => {
+    const runtime = fakeRuntime();
+    (runtime as any).scope = undefined;
+    runtime.env.MULTICA_TASK_ID = "00000000-0000-4000-8000-000000000003";
+    runtime.env.MULTICA_AGENT_ID = "00000000-0000-4000-8000-000000000004";
+    vi.mocked(runtime.multica.isCurrentChat).mockResolvedValueOnce(true);
+    const harness = install(runtime);
+    const { context: ctx, ui } = context();
+
+    await harness.handlers.get("session_start")!({}, ctx);
+
+    const prompt = await harness.handlers.get("before_agent_start")!({
+      prompt: "What is the OMP status?", systemPrompt: "Base",
+    }, ctx);
+    const recall = harness.tools.get("initiative_memory_recall")!;
+    const recalled = await (recall.execute as any)(
+      "call-workspace", { query: "OMP", top_k: 4 }, ctx.signal, undefined, ctx,
+    );
+
+    expect(runtime.workspaceContext).toHaveBeenNthCalledWith(1, "What is the OMP status?", 8, ctx.signal);
+    expect(runtime.workspaceContext).toHaveBeenNthCalledWith(2, "OMP", 4, ctx.signal);
+    expect(prompt.systemPrompt).toContain("Workspace decision");
+    expect(prompt.systemPrompt).toContain("No initiative is selected");
+    expect(recalled.details.value.workspace).toHaveLength(1);
+    expect(runtime.remember).not.toHaveBeenCalled();
+    expect(ui.setStatus).toHaveBeenCalledWith("workgraph", "Workgraph: workspace chat");
+
+    const status = harness.tools.get("initiative_memory_status")!;
+    const statusResult = await (status.execute as any)("call-status", {}, undefined, undefined, ctx);
+    expect(statusResult.details.value.mode).toBe("workspace-chat");
+  });
+
+  it("does not recall workspace memory for a generic unscoped session", async () => {
+    const runtime = fakeRuntime();
+    (runtime as any).scope = undefined;
+    const harness = install(runtime);
+
+    const prompt = await harness.handlers.get("before_agent_start")!({
+      prompt: "Prompt", systemPrompt: "Base",
+    }, context().context);
+
+    expect(prompt).toBeUndefined();
+    expect(runtime.workspaceContext).not.toHaveBeenCalled();
   });
 
   it("automatically settles, compacts, and shuts down", async () => {
@@ -273,6 +327,8 @@ describe("Workgraph Pi extension", () => {
       initiativeIdentifier: "B-184",
       issueIdentifier: "B-185",
     });
+    expect(response.details.value).toMatchObject({ pending_deliveries: 2 });
+    expect(response.details.value).not.toHaveProperty("pending");
     expect(response.content[0].text).not.toContain(issueId);
   });
 

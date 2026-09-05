@@ -13,6 +13,7 @@ export function createWorkgraphExtension(options: WorkgraphPiOptions = {}) {
   return function workgraphExtension(pi: ExtensionAPI): void {
     const runtime = options.runtimeFactory?.() ?? new WorkgraphRuntime(options);
     let started = false;
+    let workspaceChat = false;
 
     pi.registerFlag("initiative", {
       description: "Use a root Multica issue identifier such as B-184 (UUID also accepted for diagnostics)",
@@ -23,10 +24,14 @@ export function createWorkgraphExtension(options: WorkgraphPiOptions = {}) {
       if (started) return;
       started = true;
       try {
-        let resolution = await resolveFromEnvironment(runtime.multica, runtime.env, stringFlag(pi.getFlag("initiative")));
+        workspaceChat = Boolean(runtime.env.MULTICA_TASK_ID?.trim() && runtime.env.MULTICA_AGENT_ID?.trim())
+          && await runtime.multica.isCurrentChat();
+        let resolution = workspaceChat
+          ? undefined
+          : await resolveFromEnvironment(runtime.multica, runtime.env, stringFlag(pi.getFlag("initiative")));
         if (!resolution && !runtime.env.MULTICA_TASK_ID && ctx.hasUI) resolution = await selectInitiative(runtime, ctx);
         if (!resolution) {
-          ctx.ui.setStatus("workgraph", "Workgraph: no initiative");
+          ctx.ui.setStatus("workgraph", workspaceChat ? "Workgraph: workspace chat" : "Workgraph: no initiative");
           return;
         }
         const scope = runtime.lockInitiative(resolution);
@@ -43,8 +48,18 @@ export function createWorkgraphExtension(options: WorkgraphPiOptions = {}) {
     });
 
     pi.on("before_agent_start", async (event, ctx) => {
-      if (!runtime.scope) return undefined;
       try {
+        if (!runtime.scope) {
+          if (!workspaceChat) return undefined;
+          const context = await runtime.workspaceContext(event.prompt, 8, ctx.signal);
+          const workspaceMemory = boundText(JSON.stringify(publicMemories(context.memory)), 3000);
+          const memoryStatus = context.memoryError
+            ? "Cognee workspace recall unavailable for this turn."
+            : "Cognee workspace recall completed for this turn.";
+          return {
+            systemPrompt: `${event.systemPrompt}\n\n## Workgraph workspace context\nAuthoritative workspace identity (Multica):\n${JSON.stringify({ workspace_identifier: context.workspace.slug, workspace_name: context.workspace.name })}\n\nMemory status:\n${memoryStatus}\n\nNon-authoritative related workspace memory (Cognee):\n${workspaceMemory}\n\nNo initiative is selected. Do not write Workgraph memory or infer current workflow state from workspace memory.`,
+          };
+        }
         const context = await runtime.context(event.prompt, ctx.signal);
         const authoritative = JSON.stringify({
           issue_identifier: context.resolution.issue.identifier,
@@ -88,21 +103,21 @@ export function createWorkgraphExtension(options: WorkgraphPiOptions = {}) {
       await runtime.shutdown();
     });
 
-    registerTools(pi, runtime);
+    registerTools(pi, runtime, () => workspaceChat);
   };
 }
 
-function registerTools(pi: ExtensionAPI, runtime: WorkgraphRuntime): void {
+function registerTools(pi: ExtensionAPI, runtime: WorkgraphRuntime, isWorkspaceChat: () => boolean): void {
   pi.registerTool({
     name: "initiative_memory_status",
     label: "Initiative Memory Status",
-    description: "Show the immutable Workgraph initiative, Cognee availability, and pending delivery count.",
+    description: "Show the immutable Workgraph initiative, Cognee availability, and pending semantic delivery count.",
     parameters: Type.Object({}),
     async execute() {
       const scope = runtime.scope;
-      const pending = runtime.pendingCount();
+      const pendingDeliveries = runtime.pendingCount();
       return result({
-        mode: scope ? "initiative" : "no-initiative",
+        mode: scope ? "initiative" : isWorkspaceChat() ? "workspace-chat" : "no-initiative",
         scope: scope ? {
           workspaceIdentifier: scope.workspaceIdentifier,
           workspaceName: scope.workspaceName,
@@ -113,7 +128,7 @@ function registerTools(pi: ExtensionAPI, runtime: WorkgraphRuntime): void {
           rootTitle: scope.rootTitle,
         } : undefined,
         cogneeConfigured: Boolean(runtime.cognee),
-        pending,
+        pending_deliveries: pendingDeliveries,
       });
     },
   });
@@ -128,8 +143,15 @@ function registerTools(pi: ExtensionAPI, runtime: WorkgraphRuntime): void {
       top_k: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })),
     }),
     async execute(_id, params, signal) {
-      if (!runtime.scope) throw new Error("No initiative is selected; recall is disabled");
-      const recalled = await runtime.recall(params.query, params.scope ?? "initiative", params.top_k ?? 8, signal);
+      const requestedScope = params.scope ?? (runtime.scope ? "initiative" : "workspace");
+      if (!runtime.scope) {
+        if (!isWorkspaceChat()) throw new Error("No initiative is selected; recall is disabled");
+        if (requestedScope !== "workspace") throw new Error("No initiative is selected; only workspace recall is available");
+        const context = await runtime.workspaceContext(params.query, params.top_k ?? 8, signal);
+        if (context.memoryError) throw new Error(context.memoryError);
+        return result({ initiative: [], workspace: publicMemories(context.memory) });
+      }
+      const recalled = await runtime.recall(params.query, requestedScope, params.top_k ?? 8, signal);
       return result({
         initiative: publicMemories(recalled.initiative ?? []),
         workspace: publicMemories(recalled.workspace ?? []),
@@ -151,7 +173,11 @@ function registerTools(pi: ExtensionAPI, runtime: WorkgraphRuntime): void {
       source_revision: Type.Optional(Type.String({ maxLength: 256 })),
       relations: Type.Optional(Type.Array(Type.Object({
         type: StringEnum(EDGE_TYPES),
-        target: Type.String({ minLength: 1, maxLength: 512 }),
+        target: Type.String({
+          minLength: 1,
+          maxLength: 512,
+          description: "Canonical node identifier such as issue:B-184; bare issue IDs are normalized automatically.",
+        }),
       }), { maxItems: 25 })),
     }),
     async execute(_id, params) {
