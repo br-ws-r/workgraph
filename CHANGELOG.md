@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Keep OMP and Pi on one shared extension/runtime with separate stable entrypoints.
+- Support Bun's native SQLite for OMP; require Node 22.19+ for Node execution.
+- Remove Pi SDK runtime dependencies; add a harness-independent `./core` export.
+- Add strict Cognee configuration and a read-only `workgraph doctor` CLI.
+- Correct NodeSet validation, unavailable recall reporting, full pending counts,
+  unfinished delivery claims, original dataset routing and timeline scope checks.
+- Freeze launch environments and pass them to Multica subprocesses; release OMP
+  selection waits during shutdown. Omit prompt text from recall timeline events.
+- Reject Cognee redirects and omit raw HTTP error bodies from persisted errors.
+- Verify installed npm artifacts under Node/Bun and document pinned Git/tarball
+  distribution, private registry options, self-hosting, backup and recovery.
+- Block accidental registry publication with `private: true`; Git/tarball installs
+  remain supported. No v3 data migration is required.
+
+
+## Unreleased
+
 - Add an OMP-specific extension entrypoint over the existing Workgraph runtime,
   with essential tools, segmented system prompts, idle settlement, and a
   non-blocking interactive selector that defaults to no initiative after ten

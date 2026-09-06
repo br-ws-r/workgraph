@@ -1,44 +1,94 @@
 {
   "name": "@br-ws-r/workgraph",
   "version": "0.1.0",
-  "description": "Opinionated initiative-scoped knowledge graph and durable memory for Pi and OMP runs managed by Multica",
+  "description": "Workspace-scoped Cognee memory bridge for Multica agents running OMP or Pi",
   "type": "module",
   "license": "MIT",
-  "engines": { "node": ">=22.0.0" },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-    "./pi": { "types": "./dist/src/pi.d.ts", "import": "./dist/src/pi.js" },
-    "./omp": { "types": "./dist/src/omp.d.ts", "import": "./dist/src/omp.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./pi": {
+      "types": "./dist/src/pi.d.ts",
+      "import": "./dist/src/pi.js"
+    },
+    "./omp": {
+      "types": "./dist/src/omp.d.ts",
+      "import": "./dist/src/omp.js"
+    },
+    "./core": {
+      "types": "./dist/src/core.d.ts",
+      "import": "./dist/src/core.js"
+    }
   },
-  "pi": { "extensions": ["./dist/src/pi.js"] },
-  "omp": { "extensions": ["./dist/src/omp.js"] },
-  "files": ["dist", "docs", "README.md", "LICENSE", "CHANGELOG.md"],
-  "repository": { "type": "git", "url": "git+https://github.com/br-ws-r/workgraph.git" },
-  "bugs": { "url": "https://github.com/br-ws-r/workgraph/issues" },
+  "pi": {
+    "extensions": [
+      "./dist/src/pi.js"
+    ]
+  },
+  "omp": {
+    "extensions": [
+      "./dist/src/omp.js"
+    ]
+  },
+  "files": [
+    "dist",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    ".env.example"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/br-ws-r/workgraph.git"
+  },
+  "bugs": {
+    "url": "https://github.com/br-ws-r/workgraph/issues"
+  },
   "homepage": "https://github.com/br-ws-r/workgraph#readme",
-  "keywords": ["pi-package", "multica", "cognee", "knowledge-graph", "agent-memory"],
+  "keywords": [
+    "pi-package",
+    "multica",
+    "cognee",
+    "knowledge-graph",
+    "agent-memory"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.check.json",
     "test": "vitest run",
-    "check": "npm run build && npm run typecheck && npm test",
+    "check": "npm run typecheck && npm test && npm run test:package",
     "prepare": "npm run build",
-    "prepublishOnly": "npm run check"
+    "prepublishOnly": "npm run check",
+    "test:package": "npm run build && node scripts/package-smoke.mjs"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.84.4",
-    "@earendil-works/pi-coding-agent": ">=0.84.4",
-    "typebox": ">=1.0.0"
+    "@earendil-works/pi-coding-agent": ">=0.84.4"
   },
-  "dependencies": { "zod": "4.0.17" },
+  "dependencies": {
+    "zod": "4.0.17",
+    "typebox": "1.3.7"
+  },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.84.4",
     "@earendil-works/pi-coding-agent": "0.84.4",
     "@types/node": "24.3.0",
-    "typebox": "1.0.0",
     "typescript": "5.9.2",
     "vitest": "3.2.7"
+  },
+  "private": true,
+  "bin": {
+    "workgraph": "./dist/src/cli.js"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
   }
 }

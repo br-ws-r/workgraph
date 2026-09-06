@@ -1,11 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { outboxPath, rememberTimeout } from "./config.js";
 import {
   CogneeApiClient,
   createCogneeClientFromEnv,
-  type CogneeRecallEntry,
-  type CogneeRecallOptions,
 } from "./cognee.js";
 import {
   MulticaReader,
@@ -13,6 +10,8 @@ import {
   type MulticaActivity,
   type MulticaWorkspace,
 } from "./multica.js";
+import { summarizeActivity } from "./activity.js";
+import { recallValidMemories } from "./recall.js";
 import { WorkgraphOutbox, type TimelineEntry } from "./outbox.js";
 import {
   EXTRACTION_PROMPT_VERSION,
@@ -117,22 +116,20 @@ export class WorkgraphRuntime {
   #shutdown?: Promise<void>;
 
   constructor(options: WorkgraphRuntimeOptions = {}) {
-    this.env = options.env ?? process.env;
-    const userDataDir = this.env.XDG_DATA_HOME?.trim() || join(homedir(), ".local", "share");
-    const dataDir = this.env.WORKGRAPH_DATA_DIR?.trim() || join(userDataDir, "workgraph");
-    this.outbox = options.outbox ?? new WorkgraphOutbox(join(dataDir, "workgraph-workspace-v3.db"));
+    this.env = Object.freeze({ ...(options.env ?? process.env) });
+    // Validate configuration before opening SQLite so failures cannot leak a connection.
     this.cognee = options.cognee ?? createCogneeClientFromEnv(this.env);
-    this.multica = options.multica ?? new MulticaReader({ binary: this.env.MULTICA_BIN?.trim() || "multica" });
-    const configuredDeliveryTimeout = Number(this.env.WORKGRAPH_COGNEE_REMEMBER_TIMEOUT_MS ?? "120000");
-    this.#deliveryTimeoutMs = Number.isFinite(configuredDeliveryTimeout) && configuredDeliveryTimeout >= 100
-      ? Math.trunc(configuredDeliveryTimeout)
-      : 120_000;
+    this.#deliveryTimeoutMs = rememberTimeout(this.env);
+    this.multica = options.multica ?? new MulticaReader({
+      binary: this.env.MULTICA_BIN?.trim() || "multica", env: this.env,
+    });
+    this.outbox = options.outbox ?? new WorkgraphOutbox(outboxPath(this.env));
   }
 
   get scope(): Readonly<WorkgraphScope> | undefined { return this.#scope; }
 
   lockInitiative(resolution: InitiativeResolution): WorkgraphScope {
-    if (this.#scope) throw new Error("Workgraph scope is immutable for the lifetime of this Pi process");
+    if (this.#scope) throw new Error("Workgraph scope is immutable for the lifetime of this harness process");
     const workspaceId = this.env.MULTICA_WORKSPACE_ID?.trim().toLowerCase()
       || resolution.workspace.id.toLowerCase();
     if (resolution.workspace.id.toLowerCase() !== workspaceId
@@ -311,7 +308,10 @@ export class WorkgraphRuntime {
   }
 
   async remember(input: RememberInput): Promise<TimelineEntry> {
-    return this.rememberVerified(input, await this.requireFreshResolution());
+    if (this.#closing) throw new Error("Workgraph is shutting down");
+    const resolution = await this.requireFreshResolution();
+    if (this.#closing) throw new Error("Workgraph is shutting down");
+    return this.rememberVerified(input, resolution);
   }
 
   async reconcileActivity(): Promise<number> {
@@ -382,35 +382,39 @@ export class WorkgraphRuntime {
       limit,
       timeoutMs + 1000,
     );
-    for (const event of events) {
-      if (Date.now() >= deadline) break;
-      if (!event.memoryRecord) continue;
-      try {
-        await this.cognee.remember(
-          event.memoryRecord,
-          this.#scope.dataset,
-          event.payloadHash,
-          AbortSignal.timeout(Math.max(100, deadline - Date.now())),
-        );
-        if (this.outbox.markDelivered(event.eventId, this.#flushOwner)) {
-          delivered += 1;
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (this.outbox.markFailed(event.eventId, message, this.#flushOwner)) {
-          failed += 1;
+    try {
+      for (const event of events) {
+        if (Date.now() >= deadline) break;
+        if (!event.memoryRecord) continue;
+        try {
+          await this.cognee.remember(
+            event.memoryRecord,
+            datasetForWorkspace(event.memoryRecord.workspace_identifier),
+            event.payloadHash,
+            AbortSignal.timeout(Math.max(100, deadline - Date.now())),
+          );
+          if (this.outbox.markDelivered(event.eventId, this.#flushOwner)) {
+            delivered += 1;
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (this.outbox.markFailed(event.eventId, message, this.#flushOwner)) {
+            failed += 1;
+          }
         }
       }
+    } finally {
+      this.outbox.releaseClaims(this.#flushOwner);
     }
     return { delivered, failed };
   }
 
   timeline(limit = 100): TimelineEntry[] {
-    return this.#scope ? this.outbox.timeline(this.#scope.initiativeId, limit) : [];
+    return this.#scope ? this.outbox.timeline(this.#scope.initiativeId, limit, this.#scope.workspaceId) : [];
   }
 
-  pendingCount(limit = 500): number {
-    return this.#scope ? this.outbox.pending(this.#scope.workspaceId, limit).length : 0;
+  pendingCount(): number {
+    return this.#scope ? this.outbox.pendingCount(this.#scope.workspaceId) : 0;
   }
 
   async shutdown(): Promise<void> {
@@ -447,7 +451,8 @@ export class WorkgraphRuntime {
     topK: number,
     signal?: AbortSignal,
   ): Promise<WorkgraphRecall> {
-    if (!this.#scope || !this.cognee) return {};
+    if (!this.#scope) return {};
+    if (!this.cognee) throw new Error("Cognee is not configured");
     const boundedQuery = boundText(query, 2000);
     const boundedTopK = Math.min(20, Math.max(1, Math.trunc(topK)));
     const activeInitiativeNodeSet = initiativeNodeSet(this.#scope.initiativeIdentifier);
@@ -461,7 +466,8 @@ export class WorkgraphRuntime {
       result.initiative = memories
         .filter((record) => record.workspaceId === this.#scope!.workspaceId
           && record.initiativeId === this.#scope!.initiativeId
-          && record.initiativeIdentifier === this.#scope!.initiativeIdentifier);
+          && record.initiativeIdentifier === this.#scope!.initiativeIdentifier)
+        .slice(0, boundedTopK);
     }
     if (scope === "workspace" || scope === "both") {
       const memories = await recallValidMemories(this.cognee, boundedQuery, this.#scope.dataset, {
@@ -473,7 +479,7 @@ export class WorkgraphRuntime {
           && record.initiativeId !== this.#scope!.initiativeId)
         .slice(0, scope === "both" ? 4 : boundedTopK);
     }
-    this.append("context_recalled", `Recalled ${scope} context for: ${boundText(query, 300)}`, "cognee://recall", "inferred");
+    this.append("context_recalled", `Recalled ${scope} context.`, "cognee://recall", "inferred");
     return result;
   }
 
@@ -602,51 +608,6 @@ export class WorkgraphRuntime {
   }
 }
 
-function summarizeActivity(activity: MulticaActivity, issueIdentifier: string): string {
-  const details = activity.details;
-  const from = detailValue(details.from);
-  const to = detailValue(details.to);
-  let change: string;
-  switch (activity.action) {
-    case "status_changed": change = transition("Status", from, to); break;
-    case "priority_changed": change = transition("Priority", from, to); break;
-    case "title_changed": change = transition("Title", from, to); break;
-    case "start_date_changed": change = transition("Start date", from, to); break;
-    case "due_date_changed": change = transition("Due date", from, to); break;
-    case "assignee_changed":
-      change = transition("Assignee", actorValue(details, "from"), actorValue(details, "to"));
-      break;
-    case "created": change = "Issue was created."; break;
-    case "description_updated": change = "Description was updated."; break;
-    case "task_completed": change = "Task completed."; break;
-    case "task_failed": change = "Task failed."; break;
-    case "squad_leader_evaluated": {
-      const outcome = detailValue(details.outcome);
-      change = outcome ? `Squad leader evaluation recorded outcome ${outcome}.` : "Squad leader evaluation was recorded.";
-      break;
-    }
-    default: change = `Multica recorded activity ${boundText(activity.action, 128)}.`;
-  }
-  const actor = activity.actor_type
-    ? ` Actor type: ${boundText(activity.actor_type, 128)}.`
-    : "";
-  return `Multica issue ${issueIdentifier}: ${change}${actor}`;
-}
-
-function transition(label: string, from: string | undefined, to: string | undefined): string {
-  return `${label} changed from ${from ?? "(none)"} to ${to ?? "(none)"}.`;
-}
-
-function actorValue(details: Record<string, unknown>, prefix: "from" | "to"): string | undefined {
-  return detailValue(details[`${prefix}_type`]);
-}
-
-function detailValue(value: unknown): string | undefined {
-  return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
-    ? boundText(String(value), 300)
-    : undefined;
-}
-
 function projectIdentifier(title: string, id: string): string {
   const readable = title.normalize("NFKD").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase();
   return `${readable || "project"}-${id.slice(0, 8).toLowerCase()}`;
@@ -684,61 +645,9 @@ function shortHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 10);
 }
 
-function normalizeMemories(entries: CogneeRecallEntry[]): RecalledMemory[] {
-  const memories: RecalledMemory[] = [];
-  for (const entry of entries) {
-    const record = parseMemoryRecord(entry.text);
-    if (!record) continue;
-    memories.push({
-      workspaceId: record.workspace_id,
-      initiativeId: record.initiative_id,
-      initiativeIdentifier: record.initiative_identifier,
-      entityType: record.entity_type,
-      entityIdentifier: record.entity_identifier,
-      entityLabel: record.entity_label,
-      authority: record.authority,
-      summary: record.summary,
-      source: record.source,
-      sourceRevision: record.source_revision,
-      observedAt: record.observed_at,
-    });
-  }
-  return memories;
-}
-
-async function recallValidMemories(
-  cognee: CogneeApiClient,
-  query: string,
-  dataset: string,
-  options: CogneeRecallOptions,
-): Promise<RecalledMemory[]> {
-  let entries = await cognee.recall(query, dataset, options);
-  let memories = normalizeMemories(entries);
-  if (entries.length > 0 && memories.length === 0) {
-    entries = await cognee.recall(query, dataset, options);
-    memories = normalizeMemories(entries);
-    if (memories.length === 0) {
-      throw new Error("Cognee Recall returned no valid Workgraph records after one retry");
-    }
-  }
-  return memories;
-}
-
 function canonicalRelationTarget(target: string): string {
   const trimmed = target.trim();
   return /^[A-Za-z][A-Za-z0-9._-]*-\d+$/.test(trimmed) ? `issue:${trimmed.toUpperCase()}` : trimmed;
-}
-
-function parseMemoryRecord(text: string): MemoryRecord | undefined {
-  const marker = "WORKGRAPH_RECORD_V1";
-  const payload = text.includes(marker) ? text.slice(text.indexOf(marker) + marker.length) : text;
-  const trimmed = payload.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  try {
-    const parsed = MemoryRecordSchema.safeParse(JSON.parse(trimmed));
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function requiredValue(value: string | undefined, label: string): string {

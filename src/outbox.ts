@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { openDatabase, type SqliteDatabase } from "./sqlite.js";
 import { createEvent, type WorkgraphEvent, type WorkgraphEventInput } from "./schema.js";
 
 export type OutboxEventInput = WorkgraphEventInput;
@@ -15,11 +15,11 @@ export type TimelineEntry = WorkgraphEvent & {
 };
 
 export class WorkgraphOutbox {
-  readonly #db: DatabaseSync;
+  readonly #db: SqliteDatabase;
 
   constructor(readonly path: string) {
     mkdirSync(dirname(path), { recursive: true });
-    this.#db = new DatabaseSync(path);
+    this.#db = openDatabase(path);
     // Set the lock wait before negotiating WAL or creating the shared schema.
     this.#db.exec("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;");
     this.#db.exec(`
@@ -129,6 +129,22 @@ export class WorkgraphOutbox {
     `).all(workspaceId, bounded) as Record<string, unknown>[]).map(mapRow);
   }
 
+  pendingCount(workspaceId: string): number {
+    const row = this.#db.prepare(`
+      SELECT COUNT(*) AS count FROM workgraph_events
+      WHERE workspace_id = ? AND memory_record_json IS NOT NULL AND delivered_at IS NULL
+    `).get(workspaceId)!;
+    return Number(row.count);
+  }
+
+  /** Release an unfinished batch immediately; crashed workers still use lease expiry. */
+  releaseClaims(owner: string): void {
+    this.#db.prepare(`
+      UPDATE workgraph_events SET claimed_by = NULL, claim_expires_at = NULL
+      WHERE claimed_by = ? AND delivered_at IS NULL
+    `).run(owner);
+  }
+
   claimPending(workspaceId: string, owner: string, limit = 50, leaseMs = 30_000): TimelineEntry[] {
     if (!workspaceId.trim()) throw new Error("workspaceId is required");
     if (!owner.trim()) throw new Error("claim owner is required");
@@ -148,12 +164,12 @@ export class WorkgraphOutbox {
     return rows.map(mapRow).sort((left, right) => left.sequence - right.sequence);
   }
 
-  timeline(initiativeId: string, limit = 100): TimelineEntry[] {
+  timeline(initiativeId: string, limit = 100, workspaceId?: string): TimelineEntry[] {
     const bounded = boundLimit(limit);
     return (this.#db.prepare(`
-      SELECT * FROM workgraph_events WHERE initiative_id = ?
+      SELECT * FROM workgraph_events WHERE initiative_id = ? AND (? IS NULL OR workspace_id = ?)
       ORDER BY timestamp DESC, sequence DESC LIMIT ?
-    `).all(initiativeId, bounded) as Record<string, unknown>[]).map(mapRow).reverse();
+    `).all(initiativeId, workspaceId ?? null, workspaceId ?? null, bounded) as Record<string, unknown>[]).map(mapRow).reverse();
   }
 
   hasActivityBaseline(workspaceId: string, issueId: string): boolean {

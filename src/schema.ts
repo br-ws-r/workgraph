@@ -145,6 +145,7 @@ export const MemoryRecordSchema = z.object({
       repositoryIdentifier: record.repository_identifier,
     });
   } catch {
+    context.addIssue({ code: "custom", path: ["node_sets"], message: "Cannot derive NodeSets from record scope" });
     return;
   }
   if (record.node_sets.length !== expected.length || record.node_sets.some((value, index) => value !== expected[index])) {

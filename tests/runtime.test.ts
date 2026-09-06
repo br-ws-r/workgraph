@@ -97,6 +97,59 @@ function projectedRecallEntry(record: MemoryRecord): CogneeRecallEntry {
 }
 
 describe("Workgraph workspace runtime", () => {
+  it("freezes the launch environment instead of following later process changes", () => {
+    const env = { MULTICA_WORKSPACE_ID: workspace };
+    const instance = new WorkgraphRuntime({ env, outbox: outbox() });
+    env.MULTICA_WORKSPACE_ID = initiative;
+    expect(instance.env.MULTICA_WORKSPACE_ID).toBe(workspace);
+    instance.outbox.close();
+  });
+
+  it("reports missing Cognee as unavailable while retaining fresh Multica state", async () => {
+    const multica = new MulticaReader({ run: vi.fn() });
+    multica.resolveIssue = vi.fn(async () => resolution());
+    const instance = runtime({ multica });
+    instance.lockInitiative(resolution());
+    expect(await instance.context("private prompt")).toMatchObject({ memory: {}, memoryError: "Cognee is not configured" });
+    instance.outbox.close();
+  });
+
+  it("delivers old pending records to their original dataset after a workspace rename", async () => {
+    const remember = vi.fn(async (_record: MemoryRecord, _dataset: string) => ({ status: "completed" }));
+    const instance = runtime({ cognee: { remember } as unknown as CogneeApiClient });
+    const resolved = resolution();
+    instance.lockInitiative({ ...resolved, workspace: { ...resolved.workspace, slug: "renamed" } });
+    const record = memory("B-184", initiative);
+    instance.outbox.append({
+      workspaceId: workspace, initiativeId: initiative, initiativeIdentifier: "B-184", issueId: initiative,
+      issueIdentifier: "B-184", eventType: "decision_recorded", boundedSummary: record.summary,
+      source: record.source, authority: record.authority, nodeSets: record.node_sets,
+      schemaVersion: SCHEMA_VERSION, extractionPromptVersion: EXTRACTION_PROMPT_VERSION, memoryRecord: record,
+    });
+    expect(await instance.flush()).toEqual({ delivered: 1, failed: 0 });
+    expect(remember.mock.calls[0][1]).toBe("workgraph-workspace-brwsr");
+    instance.outbox.close();
+  });
+
+  it("releases unattempted deliveries when a batch exhausts its deadline", async () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const remember = vi.fn(async () => { now += 150; return { status: "completed" }; });
+    const instance = runtime({ cognee: { remember } as unknown as CogneeApiClient });
+    instance.lockInitiative(resolution());
+    const record = memory("B-184", initiative);
+    for (let i = 0; i < 2; i++) instance.outbox.append({
+      workspaceId: workspace, initiativeId: initiative, initiativeIdentifier: "B-184", issueId: initiative,
+      issueIdentifier: "B-184", eventType: "decision_recorded", boundedSummary: record.summary,
+      source: record.source, authority: record.authority, nodeSets: record.node_sets,
+      schemaVersion: SCHEMA_VERSION, extractionPromptVersion: EXTRACTION_PROMPT_VERSION, memoryRecord: record,
+    });
+    try {
+      expect(await instance.flush(25, 100)).toEqual({ delivered: 1, failed: 0 });
+      expect(instance.outbox.claimPending(workspace, "next-worker")).toHaveLength(1);
+    } finally { clock.mockRestore(); instance.outbox.close(); }
+  });
+
   it("keeps missing initiative fail-closed", async () => {
     const instance = runtime();
     await expect(instance.remember({

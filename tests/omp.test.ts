@@ -97,6 +97,18 @@ function harness(runtime: WorkgraphRuntime, initiative?: string) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Workgraph OMP extension", () => {
+  it("releases a waiting first turn when shutdown cancels the detached selector", async () => {
+    const runtime = fakeRuntime();
+    const loaded = harness(runtime);
+    await loaded.handlers.get("session_start")!({}, loaded.context);
+    const turn = loaded.handlers.get("before_agent_start")!({ prompt: "start", systemPrompt: [] }, loaded.context);
+    await loaded.handlers.get("session_shutdown")!({}, loaded.context);
+    await expect(turn).resolves.toBeUndefined();
+    loaded.timers[0]();
+    expect(loaded.ui.select).not.toHaveBeenCalled();
+    expect(runtime.context).not.toHaveBeenCalled();
+  });
+
   it("registers OMP lifecycle hooks and essential Workgraph tools", () => {
     const loaded = harness(fakeRuntime());
 
