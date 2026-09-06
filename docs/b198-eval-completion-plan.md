@@ -123,6 +123,32 @@ step must be an explicit verification checklist, not an inferred effect of the
 last child completing. This preserves separation between evidence generation
 and workflow authority.
 
+### 6. Define lifecycle parity by delivery contract, not by hook name
+
+Pi and OMP do not expose the same lifecycle boundary. Pi invokes settlement
+after an agent turn is settled; OMP invokes it after session stop and waits
+until the runtime is idle with no pending messages. Trying to call the Pi hook
+from OMP, or treating OMP session stop as an agent turn, would be a brittle
+adapter workaround.
+
+The durable contract is already shared in the runtime: every explicit
+`initiative_memory_remember` appends to the durable outbox and immediately
+schedules a Cognee flush. The lifecycle hook is only the additional point for
+reconciling automatic Multica activity and draining remaining work. Keep that
+shared write/flush path and retain host-specific safe boundaries.
+
+For release confidence, add tests which assert the contract rather than hook
+name equality:
+
+- an explicit write schedules one delivery attempt in both hosts without waiting
+  for a session boundary;
+- Pi settles after its safe turn boundary;
+- OMP settles only after `session_stop`, idle, and no pending messages; and
+- either host leaves an interrupted write durably pending for the next run.
+
+This makes a delayed or interrupted OMP session observable and recoverable
+without risking a flush while OMP is still processing messages.
+
 ## Product follow-ups for Workgraph
 
 These are separate implementation candidates; they are not prerequisites for
@@ -137,6 +163,10 @@ the B-198 recovery.
 3. Add a live Pi → OMP → Pi end-to-end release test in a controlled test
    workspace. Unit tests currently validate the OMP adapter with a mocked host;
    B-198 is valuable live evidence but should not be the only regression gate.
+4. Add a small graph-view policy: make the default Mindmap lens show explicit
+   decisions, handoffs, and outcomes first, with automatic activity evidence
+   available as a filter or secondary layer. This preserves audit history while
+   preventing status transitions from visually drowning out the relay.
 
 ## Acceptance checklist
 
@@ -150,3 +180,5 @@ the B-198 recovery.
       concrete `blocked` reason.
 - [ ] A subsequent staged evaluation uses explicit relay graph relations and
       the terminal-status contract.
+- [ ] Pi and OMP pass the shared delivery-contract tests while retaining their
+      distinct safe lifecycle boundaries.
