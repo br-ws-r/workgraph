@@ -261,6 +261,32 @@ Schema v3 starts with `workgraph-workspace-v3.db` and the readable
 
 ## Pi tools
 
+These tools have the same memory contract in Pi and OMP. A successful
+`initiative_memory_remember` returns `event_id`, `entity_identifier`, and
+`delivery: "queued"`. Keep the event ID and check
+`initiative_timeline({"event_id":"<returned event ID>"})` until its delivery is
+`delivered`. Queued acknowledges local persistence only. Use Cognee recall
+separately to verify remote readability.
+
+`initiative_timeline` is explicitly labelled `storage: "local_outbox"`. Its
+optional exact `event_id` and `entity_identifier` filters run before the limit,
+so an older write is not hidden behind recent status events. `records: "explicit"`
+shows authored memory; `records: "activity"` shows automatic Multica activity.
+The default `all` view retains the full audit timeline. Graph relations and
+NodeSets are included for inspection.
+
+For a known entity, use
+`initiative_memory_recall({"query":"<identifier or descriptive terms>","entity_identifier":"<exact ID>"})`.
+This mode requires the active initiative, returns only matching Cognee records,
+and can retry once with the locally stored label/summary. Without that local
+record, provide descriptive terms yourself. The retry improves semantic
+retrieval; it is not a guaranteed remote key lookup. An empty response remains
+empty even when the local timeline says delivered. No new store or unrestricted
+Cognee query is introduced.
+
+For a reproducible six-agent evaluation, use the
+[live relay protocol](docs/memory-relay-eval.md).
+
 | Tool | Purpose |
 | --- | --- |
 | `initiative_memory_status` | Show scope, backend, and pending semantic deliveries |

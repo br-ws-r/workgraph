@@ -97,6 +97,44 @@ function projectedRecallEntry(record: MemoryRecord): CogneeRecallEntry {
 }
 
 describe("Workgraph workspace runtime", () => {
+  it("uses a local exact-ID hint only to retry Cognee and never returns the local record", async () => {
+    const resolved = resolution();
+    const multica = new MulticaReader({ run: vi.fn() });
+    multica.resolveIssue = vi.fn(async () => resolved);
+    const recall = vi.fn().mockResolvedValue([]);
+    const instance = runtime({ multica, cognee: { recall } as unknown as CogneeApiClient });
+    instance.lockInitiative(resolved);
+    vi.spyOn(instance, "scheduleFlush").mockImplementation(() => undefined);
+    const event = await instance.remember({
+      entityType: "Decision", authority: "confirmed", entityIdentifier: "decision:relay-5",
+      entityLabel: "Relay fifth hop", summary: "silver orbit", source: "test://relay",
+    });
+    instance.outbox.markDelivered(event.eventId);
+    const remote = { ...event.memoryRecord!, summary: "remote evidence" };
+    const foreign = { ...remote, initiative_id: task, initiative_identifier: "B-999",
+      node_sets: ["initiative:B-999", "type:decision", "authority:confirmed",
+        "project:devbox-00000000", "stage:B-184-2"] };
+    recall.mockResolvedValueOnce([recallEntry(foreign)]).mockResolvedValueOnce([recallEntry(remote)]);
+    const result = await instance.recallEntity("decision:relay-5", "decision:relay-5");
+    expect(result.initiative).toMatchObject([{ summary: "remote evidence" }]);
+    expect(recall).toHaveBeenNthCalledWith(2, "Relay fifth hop silver orbit", "workgraph-workspace-brwsr",
+      { nodeNames: ["initiative:B-184"], topK: 20, signal: undefined });
+
+    recall.mockClear();
+    expect(await instance.recallEntity("decision:relay-5", "decision:relay-5")).toEqual({ initiative: [] });
+    expect(recall).toHaveBeenCalledTimes(2); // A delivered local record is still not remote recall.
+    recall.mockClear();
+    expect(await instance.recallEntity("absent", "decision:absent")).toEqual({ initiative: [] });
+    expect(recall).toHaveBeenCalledTimes(1);
+    recall.mockRejectedValueOnce(new Error("Cognee offline"));
+    await expect(instance.recallEntity("decision:relay-5", "decision:relay-5")).rejects.toThrow("Cognee offline");
+    multica.resolveIssue = vi.fn().mockRejectedValue(new Error("Multica offline"));
+    recall.mockClear();
+    await expect(instance.recallEntity("decision:relay-5", "decision:relay-5")).rejects.toThrow("Multica offline");
+    expect(recall).not.toHaveBeenCalled();
+    instance.outbox.close();
+  });
+
   it("keeps missing initiative fail-closed", async () => {
     const instance = runtime();
     await expect(instance.remember({

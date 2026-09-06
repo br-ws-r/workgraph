@@ -93,7 +93,10 @@ function createWorkgraphHostExtension(host: "pi" | "omp", options: WorkgraphPiOp
       event: { prompt: string; systemPrompt: string | string[] },
       ctx: ExtensionContext,
     ) => {
-      if (host === "omp") await selectionPending;
+      if (host === "omp") {
+        settleGeneration++; // A new turn invalidates any deferred stop callback.
+        await selectionPending;
+      }
       try {
         if (!runtime.scope) {
           if (!workspaceChat) return undefined;
@@ -142,11 +145,12 @@ function createWorkgraphHostExtension(host: "pi" | "omp", options: WorkgraphPiOp
     } else {
       (pi.on as unknown as (
         event: "session_stop",
-        handler: (event: unknown, ctx: OmpExtensionContext) => void,
-      ) => void)("session_stop", (_event, ctx) => {
+        handler: (event: { signal?: AbortSignal }, ctx: OmpExtensionContext) => void,
+      ) => void)("session_stop", (event, ctx) => {
         const generation = ++settleGeneration;
         const settleWhenIdle = () => {
-          if (generation !== settleGeneration || !runtime.scope || ctx.hasPendingMessages()) return;
+          if (shuttingDown || event.signal?.aborted || generation !== settleGeneration
+            || !runtime.scope || ctx.hasPendingMessages()) return;
           if (!ctx.isIdle()) {
             ctx.setTimeout(settleWhenIdle, 25);
             return;
@@ -247,11 +251,22 @@ function registerTools(
     description: "Recall the current initiative or bounded related history; workspace-only recall is available on demand in verified chats.",
     parameters: Type.Object({
       query: Type.String({ minLength: 1, maxLength: 2000 }),
+      entity_identifier: Type.Optional(Type.String({
+        minLength: 1, maxLength: 512,
+        description: "Exact entity filter within the active initiative. Results always come from Cognee; a local record may help form one retry query.",
+      })),
       scope: Type.Optional(StringEnum(["initiative", "workspace", "both"] as const)),
       top_k: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })),
     }),
     async execute(_id, params, signal) {
       const requestedScope = params.scope ?? (runtime.scope ? "initiative" : "workspace");
+      if (params.entity_identifier !== undefined) {
+        if (!runtime.scope || requestedScope !== "initiative") {
+          throw new Error("Exact entity recall requires the active initiative scope");
+        }
+        const recalled = await runtime.recallEntity(params.query, params.entity_identifier, signal);
+        return result({ initiative: publicMemories(recalled.initiative ?? []), workspace: [] });
+      }
       if (!runtime.scope) {
         if (!isWorkspaceChat()) throw new Error("No initiative is selected; recall is disabled");
         if (requestedScope !== "workspace") throw new Error("No initiative is selected; only workspace recall is available");
@@ -271,7 +286,7 @@ function registerTools(
     ...writeHostOptions,
     name: "initiative_memory_remember",
     label: "Remember Initiative Memory",
-    description: "Append one bounded, sourced record to the active initiative outbox for durable Cognee delivery.",
+    description: "Queue one bounded, sourced record for Cognee. Queued is not delivered: use initiative_timeline with the returned event_id to check delivery, then initiative_memory_recall to verify remote readability.",
     parameters: Type.Object({
       entity_type: StringEnum(NODE_TYPES),
       authority: StringEnum(AUTHORITY_LEVELS),
@@ -300,7 +315,11 @@ function registerTools(
         sourceRevision: params.source_revision,
         relations: params.relations,
       });
-      return result({ entity_identifier: event.memoryRecord!.entity_identifier, delivery: "queued" });
+      return result({
+        event_id: event.eventId,
+        entity_identifier: event.memoryRecord!.entity_identifier,
+        delivery: "queued",
+      });
     },
   });
 
@@ -308,11 +327,24 @@ function registerTools(
     ...readHostOptions,
     name: "initiative_timeline",
     label: "Initiative Timeline",
-    description: "Read the exact chronological SQLite timeline for the immutable active initiative.",
-    parameters: Type.Object({ limit: Type.Optional(Type.Number({ minimum: 1, maximum: 500 })) }),
+    description: "Read the local SQLite delivery ledger, not Cognee recall. Filter by event_id or entity_identifier for exact lookup; records=explicit hides automatic activity. A delivered entry alone does not prove remote recall.",
+    parameters: Type.Object({
+      limit: Type.Optional(Type.Number({ minimum: 1, maximum: 500 })),
+      event_id: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+      entity_identifier: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+      records: Type.Optional(StringEnum(["all", "explicit", "activity"] as const)),
+    }),
     async execute(_id, params) {
       if (!runtime.scope) throw new Error("No initiative is selected; timeline is unavailable");
-      return result(runtime.timeline(params.limit ?? 100).map((event) => ({
+      return result(runtime.timeline(params.limit ?? 100, {
+        eventId: params.event_id, entityIdentifier: params.entity_identifier, records: params.records,
+      }).map((event) => ({
+        event_id: event.eventId,
+        entity_identifier: event.memoryRecord?.entity_identifier,
+        entity_type: event.memoryRecord?.entity_type,
+        node_sets: event.nodeSets,
+        relations: event.memoryRecord?.relations,
+        storage: "local_outbox",
         timestamp: event.timestamp,
         event_type: event.eventType,
         workspace_identifier: runtime.scope!.workspaceIdentifier,

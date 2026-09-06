@@ -47,6 +47,23 @@ function eventInput(overrides: Partial<OutboxEventInput> = {}): OutboxEventInput
 }
 
 describe("workspace outbox", () => {
+  it("finds exact records before limiting noisy timelines and preserves revisions", () => {
+    const outbox = new WorkgraphOutbox(databasePath());
+    const first = outbox.append(eventInput());
+    const second = outbox.append(eventInput());
+    for (let i = 0; i < 110; i++) {
+      outbox.append(eventInput({ eventId: `multica-activity:${i}`, memoryRecord: undefined }));
+    }
+    expect(outbox.timeline(initiative, 1, { eventId: first.eventId })[0].eventId).toBe(first.eventId);
+    expect(outbox.timeline(initiative, 100, { entityIdentifier: "decision:test" })
+      .map((event) => event.eventId)).toEqual([first.eventId, second.eventId]);
+    expect(outbox.timeline(initiative, 1, { records: "explicit" })[0].eventId).toBe(second.eventId);
+    expect(outbox.timeline(initiative, 2, { records: "activity" })).toHaveLength(2);
+    expect(outbox.timeline(initiative, 1, { entityIdentifier: "decision:test' OR 1=1 --" })).toEqual([]);
+    expect(outbox.timeline(workspaceB, 1, { eventId: first.eventId })).toEqual([]);
+    outbox.close();
+  });
+
   it("idempotently appends through concurrent connections without replacing payload", () => {
     const path = databasePath();
     const first = new WorkgraphOutbox(path);
