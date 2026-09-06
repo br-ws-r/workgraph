@@ -64,4 +64,3 @@ function selectorProjectLabel(title: string): string {
     .replace(/^-+|-+$/g, "")
     .toLowerCase();
 }
-

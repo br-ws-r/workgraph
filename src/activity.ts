@@ -45,4 +45,3 @@ function detailValue(value: unknown): string | undefined {
     ? boundText(String(value), 300)
     : undefined;
 }
-
