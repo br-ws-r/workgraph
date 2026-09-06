@@ -2,7 +2,8 @@
 
 Workspace-scoped knowledge graph and durable initiative memory for
 [Multica](https://github.com/multica-ai/multica) agents running
-[Pi](https://github.com/earendil-works/pi), backed by
+[Pi](https://github.com/earendil-works/pi) or
+[Oh My Pi](https://github.com/can1357/oh-my-pi), backed by
 [Cognee](https://github.com/topoteretes/cognee).
 
 > **Status: experimental.** Workgraph is ready for evaluation, but its public
@@ -58,7 +59,7 @@ Pi remains usable, but recall, timeline access, and writes are disabled.
 
 - Node.js 22 or newer. CI currently tests Node.js 24.
 - A compatible Pi installation. This package currently targets
-  `@earendil-works/pi-coding-agent` `>=0.84.4`.
+  `@earendil-works/pi-coding-agent` `>=0.84.4`, or OMP `>=18.1.11`.
 - An authenticated Multica CLI. The resolver is verified against Multica
   `v0.4.35`; test another version before production use.
 - Cognee Cloud, or a reachable self-hosted Cognee HTTP API.
@@ -101,9 +102,13 @@ cd workgraph
 npm ci
 npm run check
 pi install "$PWD"
+# Alternatively, register the OMP-specific adapter:
+omp plugin link "$PWD"
 ```
 
-Restart Pi after installation if it was already running.
+Restart Pi or OMP after installation if it was already running. The package
+keeps separate `pi` and `omp` entrypoints over the same Workgraph runtime,
+Cognee dataset, and SQLite outbox.
 
 ### 3. Configure Cognee Cloud
 
@@ -147,7 +152,10 @@ three most recently updated initiatives with readable IDs such as `B-184`, and
 manual entry accepts the same `XYZ-123` form. A child issue is rejected because
 it could make dataset selection ambiguous to a human operator. Workgraph walks
 the paginated Multica issue list before sorting, so older active initiatives are
-not hidden by the first board page.
+not hidden by the first board page. In OMP the selector runs outside the
+`session_start` handler and defaults to **No initiative** after ten seconds, so
+startup is never held open by OMP's lifecycle timeout. Explicit `--initiative`
+and Multica-managed launches do not create the selector or its timer.
 
 Ask Pi to call `initiative_memory_status`. A working setup reports:
 
@@ -163,7 +171,7 @@ ingestion completed. Failed or interrupted writes remain pending for retry.
 
 ## Managed Multica runs
 
-When Multica launches Pi for a task, Workgraph resolves the assigned task rather
+When Multica launches Pi or OMP for a task, Workgraph resolves the assigned task rather
 than asking a person to select an initiative. The process environment must
 contain:
 
@@ -177,7 +185,7 @@ MULTICA_RUN_ID=<run-uuid>
 ```
 
 Workgraph runs `multica agent tasks <agent-id>` to find the exact task, reads its
-issue, and follows `parent_issue_id` to the root. Start one new Pi process per
+issue, and follows `parent_issue_id` to the root. Start one new harness process per
 Multica run; initiative scope is intentionally immutable in-process.
 
 Headless workspace chats do not have an issue or initiative assignment. In that
