@@ -1,7 +1,7 @@
 {
   "name": "@br-ws-r/workgraph",
   "version": "0.1.0",
-  "description": "Opinionated initiative-scoped knowledge graph and durable memory for Pi runs managed by Multica",
+  "description": "Opinionated initiative-scoped knowledge graph and durable memory for Pi and OMP runs managed by Multica",
   "type": "module",
   "license": "MIT",
   "engines": { "node": ">=22.0.0" },
@@ -9,9 +9,11 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-    "./pi": { "types": "./dist/src/pi.d.ts", "import": "./dist/src/pi.js" }
+    "./pi": { "types": "./dist/src/pi.d.ts", "import": "./dist/src/pi.js" },
+    "./omp": { "types": "./dist/src/omp.d.ts", "import": "./dist/src/omp.js" }
   },
   "pi": { "extensions": ["./dist/src/pi.js"] },
+  "omp": { "extensions": ["./dist/src/omp.js"] },
   "files": ["dist", "docs", "README.md", "LICENSE", "CHANGELOG.md"],
   "repository": { "type": "git", "url": "git+https://github.com/br-ws-r/workgraph.git" },
   "bugs": { "url": "https://github.com/br-ws-r/workgraph/issues" },

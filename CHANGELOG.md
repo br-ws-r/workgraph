@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add an OMP-specific extension entrypoint over the existing Workgraph runtime,
+  with essential tools, segmented system prompts, idle settlement, and a
+  non-blocking interactive selector that defaults to no initiative after ten
+  seconds while explicit and Multica-managed runs start without that delay.
 - Bootstrap a fresh verified workspace chat with one bounded Cognee recall while
   keeping resumed chat messages on explicit, read-only recall.
 - Put readable issue IDs first in the interactive selector and show the current
