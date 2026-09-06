@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Return a stable event ID from queued writes and allow exact event/entity
+  lookup and explicit/activity filtering in the local initiative timeline.
+- Add initiative-only exact entity selection for Cognee recall, with one bounded
+  retry using local record text when available; never return local data as remote recall.
+- Retry existing pending deliveries at startup and settlement even without new
+  Multica activity, and discard stale or aborted OMP settlement callbacks.
+- Add bidirectional Pi/OMP delivery and restart tests using real Workgraph
+  runtime/SQLite with simulated Cognee HTTP, plus a live relay acceptance protocol.
 - Add an OMP-specific extension entrypoint over the existing Workgraph runtime,
   with essential tools, segmented system prompts, idle settlement, and a
   non-blocking interactive selector that defaults to no initiative after ten

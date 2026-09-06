@@ -5,6 +5,12 @@ import { createEvent, type WorkgraphEvent, type WorkgraphEventInput } from "./sc
 
 export type OutboxEventInput = WorkgraphEventInput;
 
+export interface TimelineFilter {
+  eventId?: string;
+  entityIdentifier?: string;
+  records?: "all" | "explicit" | "activity";
+}
+
 export type TimelineEntry = WorkgraphEvent & {
   sequence: number;
   deliveryAttempts: number;
@@ -148,12 +154,21 @@ export class WorkgraphOutbox {
     return rows.map(mapRow).sort((left, right) => left.sequence - right.sequence);
   }
 
-  timeline(initiativeId: string, limit = 100): TimelineEntry[] {
+  timeline(initiativeId: string, limit = 100, filter: TimelineFilter = {}): TimelineEntry[] {
     const bounded = boundLimit(limit);
     return (this.#db.prepare(`
       SELECT * FROM workgraph_events WHERE initiative_id = ?
+        AND (? IS NULL OR event_id = ?)
+        AND (? IS NULL OR json_extract(memory_record_json, '$.entity_identifier') = ?)
+        AND (? = 'all'
+          OR (? = 'activity' AND event_id LIKE 'multica-activity:%')
+          OR (? = 'explicit' AND memory_record_json IS NOT NULL
+            AND event_id NOT LIKE 'multica-activity:%' AND event_type != 'compaction_anchor'))
       ORDER BY timestamp DESC, sequence DESC LIMIT ?
-    `).all(initiativeId, bounded) as Record<string, unknown>[]).map(mapRow).reverse();
+    `).all(initiativeId, filter.eventId ?? null, filter.eventId ?? null,
+      filter.entityIdentifier ?? null, filter.entityIdentifier ?? null,
+      filter.records ?? "all", filter.records ?? "all", filter.records ?? "all",
+      bounded) as Record<string, unknown>[]).map(mapRow).reverse();
   }
 
   hasActivityBaseline(workspaceId: string, issueId: string): boolean {

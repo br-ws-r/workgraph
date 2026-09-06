@@ -198,4 +198,44 @@ describe("Workgraph OMP extension", () => {
     loaded.timers[1]();
     await vi.waitFor(() => expect(runtime.settle).toHaveBeenCalledOnce());
   });
+
+  it("discards deferred settlement when a new turn starts or shutdown occurs", async () => {
+    const runtime = fakeRuntime();
+    Object.defineProperty(runtime, "scope", { value: { initiativeIdentifier: "B-195" } });
+    const loaded = harness(runtime);
+    loaded.handlers.get("session_stop")!({}, loaded.context);
+    await loaded.handlers.get("before_agent_start")!({ prompt: "Continue", systemPrompt: [] }, loaded.context);
+    loaded.timers[0]();
+    expect(runtime.settle).not.toHaveBeenCalled();
+
+    loaded.handlers.get("session_stop")!({}, loaded.context);
+    await loaded.handlers.get("session_shutdown")!({}, loaded.context);
+    loaded.timers[1]();
+    expect(runtime.settle).not.toHaveBeenCalled();
+  });
+
+  it("discards an aborted OMP settle pass", () => {
+    const runtime = fakeRuntime();
+    Object.defineProperty(runtime, "scope", { value: { initiativeIdentifier: "B-195" } });
+    const loaded = harness(runtime);
+    const controller = new AbortController();
+    loaded.handlers.get("session_stop")!({ signal: controller.signal }, loaded.context);
+    controller.abort();
+    loaded.timers[0]();
+    expect(runtime.settle).not.toHaveBeenCalled();
+  });
+
+  it("skips a stop with pending messages and settles at the next stop", async () => {
+    const runtime = fakeRuntime();
+    Object.defineProperty(runtime, "scope", { value: { initiativeIdentifier: "B-195" } });
+    const loaded = harness(runtime);
+    loaded.context.hasPendingMessages.mockReturnValue(true);
+    loaded.handlers.get("session_stop")!({}, loaded.context);
+    loaded.timers[0]();
+    expect(runtime.settle).not.toHaveBeenCalled();
+    loaded.context.hasPendingMessages.mockReturnValue(false);
+    loaded.handlers.get("session_stop")!({}, loaded.context);
+    loaded.timers[1]();
+    await vi.waitFor(() => expect(runtime.settle).toHaveBeenCalledOnce());
+  });
 });

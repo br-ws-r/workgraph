@@ -363,7 +363,7 @@ describe("Workgraph Pi extension", () => {
       relations: [{ type: "about", target: "issue:B-184" }],
     });
     expect(remembered.details.value).toEqual({
-      entity_identifier: "decision:workspace-memory", delivery: "queued",
+      event_id: "event-1", entity_identifier: "decision:workspace-memory", delivery: "queued",
     });
   });
 
