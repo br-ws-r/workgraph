@@ -12,7 +12,7 @@ import {
 } from "./multica.js";
 import { summarizeActivity } from "./activity.js";
 import { recallValidMemories } from "./recall.js";
-import { WorkgraphOutbox, type TimelineEntry } from "./outbox.js";
+import { WorkgraphOutbox, type TimelineEntry, type TimelineFilter } from "./outbox.js";
 import {
   EXTRACTION_PROMPT_VERSION,
   MemoryRecordSchema,
@@ -314,11 +314,34 @@ export class WorkgraphRuntime {
     return this.rememberVerified(input, resolution);
   }
 
+  /** Exact selection of remote records; local text is only a bounded query hint. */
+  async recallEntity(query: string, entityIdentifier: string, signal?: AbortSignal): Promise<WorkgraphRecall> {
+    await this.requireFreshResolution();
+    if (!this.cognee) throw new Error("Cognee is not configured; remote entity recall is unavailable");
+    const identifier = requiredValue(entityIdentifier, "Entity identifier");
+    if (identifier.length > 512) throw new Error("Entity identifier exceeds 512 characters");
+    const select = (result: WorkgraphRecall) => (result.initiative ?? [])
+      .filter((record) => record.entityIdentifier === identifier);
+    let matches = select(await this.recallVerified(query, "initiative", 20, signal));
+    if (matches.length === 0) {
+      const hint = this.timeline(1, { entityIdentifier: identifier })[0]?.memoryRecord;
+      if (hint) {
+        const retryQuery = boundText(`${hint.entity_label}\n${hint.summary}`, 2000);
+        if (retryQuery !== boundText(query, 2000)) {
+          matches = select(await this.recallVerified(retryQuery, "initiative", 20, signal));
+        }
+      }
+    }
+    return { initiative: matches };
+  }
+
   async reconcileActivity(): Promise<number> {
     if (this.#closing) throw new Error("Workgraph is shutting down");
     const operation = this.#reconciliations.then(() => this.reconcileActivityNow());
     this.#reconciliations = operation.catch(() => undefined);
-    return (await operation).captured;
+    const { captured } = await operation;
+    this.scheduleFlush(); // Retry old records even when no new activity exists.
+    return captured;
   }
 
   async settle(): Promise<TimelineEntry> {
@@ -326,6 +349,7 @@ export class WorkgraphRuntime {
     const operation = this.#reconciliations.then(() => this.reconcileActivityNow());
     this.#reconciliations = operation.catch(() => undefined);
     const { resolution } = await operation;
+    this.scheduleFlush();
     const observedAt = new Date().toISOString();
     return this.append(
       "run_settled",
@@ -409,8 +433,8 @@ export class WorkgraphRuntime {
     return { delivered, failed };
   }
 
-  timeline(limit = 100): TimelineEntry[] {
-    return this.#scope ? this.outbox.timeline(this.#scope.initiativeId, limit, this.#scope.workspaceId) : [];
+  timeline(limit = 100, filter: TimelineFilter = {}): TimelineEntry[] {
+    return this.#scope ? this.outbox.timeline(this.#scope.initiativeId, limit, filter, this.#scope.workspaceId) : [];
   }
 
   pendingCount(): number {
@@ -531,7 +555,6 @@ export class WorkgraphRuntime {
       this.outbox.markActivitySeen(this.#scope.workspaceId, this.#scope.issueId, activity.id);
       captured += 1;
     }
-    if (captured > 0) this.scheduleFlush();
     return { captured, resolution };
   }
 

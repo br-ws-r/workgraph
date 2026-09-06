@@ -47,6 +47,23 @@ function eventInput(overrides: Partial<OutboxEventInput> = {}): OutboxEventInput
 }
 
 describe("workspace outbox", () => {
+  it("finds exact records before limiting noisy timelines and preserves revisions", () => {
+    const outbox = new WorkgraphOutbox(databasePath());
+    const first = outbox.append(eventInput());
+    const second = outbox.append(eventInput());
+    for (let i = 0; i < 110; i++) {
+      outbox.append(eventInput({ eventId: `multica-activity:${i}`, memoryRecord: undefined }));
+    }
+    expect(outbox.timeline(initiative, 1, { eventId: first.eventId })[0].eventId).toBe(first.eventId);
+    expect(outbox.timeline(initiative, 100, { entityIdentifier: "decision:test" })
+      .map((event) => event.eventId)).toEqual([first.eventId, second.eventId]);
+    expect(outbox.timeline(initiative, 1, { records: "explicit" })[0].eventId).toBe(second.eventId);
+    expect(outbox.timeline(initiative, 2, { records: "activity" })).toHaveLength(2);
+    expect(outbox.timeline(initiative, 1, { entityIdentifier: "decision:test' OR 1=1 --" })).toEqual([]);
+    expect(outbox.timeline(workspaceB, 1, { eventId: first.eventId })).toEqual([]);
+    outbox.close();
+  });
+
   it("counts the full semantic backlog and isolates timelines by workspace", () => {
     const outbox = new WorkgraphOutbox(databasePath());
     for (let index = 0; index < 501; index++) outbox.append(eventInput());
@@ -54,7 +71,7 @@ describe("workspace outbox", () => {
     const other = outbox.append(eventInput({ workspaceId: workspaceB }));
     expect(outbox.pendingCount(workspaceA)).toBe(501);
     expect(outbox.pendingCount(workspaceB)).toBe(1);
-    expect(outbox.timeline(initiative, 100, workspaceB).map((event) => event.eventId)).toEqual([other.eventId]);
+    expect(outbox.timeline(initiative, 100, {}, workspaceB).map((event) => event.eventId)).toEqual([other.eventId]);
     outbox.close();
   });
 

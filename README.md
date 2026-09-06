@@ -201,6 +201,32 @@ issue-scoped launches. Start one harness process per managed run.
 
 ## Tools (OMP and Pi)
 
+These tools have the same memory contract in Pi and OMP. A successful
+`initiative_memory_remember` returns `event_id`, `entity_identifier`, and
+`delivery: "queued"`. Keep the event ID and check
+`initiative_timeline({"event_id":"<returned event ID>"})` until its delivery is
+`delivered`. Queued acknowledges local persistence only. Use Cognee recall
+separately to verify remote readability.
+
+`initiative_timeline` is explicitly labelled `storage: "local_outbox"`. Its
+optional exact `event_id` and `entity_identifier` filters run before the limit,
+so an older write is not hidden behind recent status events. `records: "explicit"`
+shows authored memory; `records: "activity"` shows automatic Multica activity.
+The default `all` view retains the full audit timeline. Graph relations and
+NodeSets are included for inspection.
+
+For a known entity, use
+`initiative_memory_recall({"query":"<identifier or descriptive terms>","entity_identifier":"<exact ID>"})`.
+This mode requires the active initiative, returns only matching Cognee records,
+and can retry once with the locally stored label/summary. Without that local
+record, provide descriptive terms yourself. The retry improves semantic
+retrieval; it is not a guaranteed remote key lookup. An empty response remains
+empty even when the local timeline says delivered. No new store or unrestricted
+Cognee query is introduced.
+
+For a reproducible six-agent evaluation, use the
+[live relay protocol](docs/memory-relay-eval.md).
+
 | Tool | Purpose |
 | --- | --- |
 | `initiative_memory_status` | Scope, configured backend and exact pending semantic delivery count |
@@ -250,7 +276,7 @@ when they share Cognee. Do not use SQLite WAL on a network filesystem.
 
 Semantic delivery is at least once. An `Idempotency-Key` is sent, but Cognee does
 not document deduplication guarantees for it. An ambiguous timeout can produce
-remote duplicates. Writes retry on later writes and shutdown; there is no
+remote duplicates. Writes retry at startup, settlement, later writes and shutdown; there is no
 standalone background delivery daemon. Abrupt termination leaves pending records
 and expiring claims for a later process.
 
@@ -270,6 +296,8 @@ npm ci
 npm run check
 # With Bun 1.3.14+ on PATH:
 node scripts/package-smoke.mjs --bun
+# Check Git prepare/install from the committed HEAD:
+node scripts/package-smoke.mjs --git
 ```
 
 `check` typechecks, runs regression tests, builds, packs and installs the artifact

@@ -87,7 +87,10 @@ export function createWorkgraphHostExtension(host: "pi" | "omp", options: Workgr
       event: { prompt: string; systemPrompt: string | string[] },
       ctx: ExtensionContext,
     ) => {
-      if (host === "omp") await selectionPending;
+      if (host === "omp") {
+        settleGeneration++; // A new turn invalidates a deferred stop callback.
+        await selectionPending;
+      }
       if (shuttingDown) return undefined;
       try {
         if (!runtime.scope) {
@@ -137,11 +140,12 @@ export function createWorkgraphHostExtension(host: "pi" | "omp", options: Workgr
     } else {
       (pi.on as unknown as (
         event: "session_stop",
-        handler: (event: unknown, ctx: OmpExtensionContext) => void,
-      ) => void)("session_stop", (_event, ctx) => {
+        handler: (event: { signal?: AbortSignal }, ctx: OmpExtensionContext) => void,
+      ) => void)("session_stop", (event, ctx) => {
         const generation = ++settleGeneration;
         const settleWhenIdle = () => {
-          if (generation !== settleGeneration || !runtime.scope || ctx.hasPendingMessages()) return;
+          if (shuttingDown || event.signal?.aborted || generation !== settleGeneration
+            || !runtime.scope || ctx.hasPendingMessages()) return;
           if (!ctx.isIdle()) {
             ctx.setTimeout(settleWhenIdle, 25);
             return;

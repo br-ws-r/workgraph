@@ -22,6 +22,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+      - run: node scripts/package-smoke.mjs --git
+        if: matrix.node == '24'
       - run: npm audit --omit=dev
 
   bun-package:

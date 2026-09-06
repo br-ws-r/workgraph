@@ -177,7 +177,7 @@ Cognee ingestion within your chosen timeout. The default recall timeout is short
 self-hosted cold starts may need a larger value. TLS errors and redirects are
 errors, not reasons to turn off certificate checks. Graph extraction may duplicate
 records after ambiguous timeouts because Cognee does not guarantee the supplied
-idempotency key. New writes and graceful shutdown retry pending work; there is no
+idempotency key. Startup, settlement, new writes and graceful shutdown retry pending work; there is no
 periodic retry while every harness is stopped or idle.
 
 ## Acceptance check
