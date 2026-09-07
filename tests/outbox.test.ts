@@ -64,6 +64,29 @@ describe("workspace outbox", () => {
     outbox.close();
   });
 
+  it("counts the full semantic backlog and isolates timelines by workspace", () => {
+    const outbox = new WorkgraphOutbox(databasePath());
+    for (let index = 0; index < 501; index++) outbox.append(eventInput());
+    outbox.append(eventInput({ memoryRecord: undefined }));
+    const other = outbox.append(eventInput({ workspaceId: workspaceB }));
+    expect(outbox.pendingCount(workspaceA)).toBe(501);
+    expect(outbox.pendingCount(workspaceB)).toBe(1);
+    expect(outbox.timeline(initiative, 100, {}, workspaceB).map((event) => event.eventId)).toEqual([other.eventId]);
+    outbox.close();
+  });
+
+  it("releases an unfinished batch without stealing another worker's claims", () => {
+    const outbox = new WorkgraphOutbox(databasePath());
+    outbox.append(eventInput());
+    outbox.append(eventInput());
+    outbox.claimPending(workspaceA, "one", 1);
+    outbox.claimPending(workspaceA, "two", 1);
+    outbox.releaseClaims("one");
+    expect(outbox.claimPending(workspaceA, "three")).toHaveLength(1);
+    expect(outbox.pending(workspaceA).some((event) => event.claimedBy === "two")).toBe(true);
+    outbox.close();
+  });
+
   it("idempotently appends through concurrent connections without replacing payload", () => {
     const path = databasePath();
     const first = new WorkgraphOutbox(path);

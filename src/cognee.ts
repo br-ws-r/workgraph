@@ -1,6 +1,9 @@
 import { EXTRACTION_PROMPT, boundText, type MemoryRecord } from "./schema.js";
-
-export type CogneeAuthScheme = "x-api-key" | "bearer" | "none";
+import {
+  cogneeBaseUrl, readCogneeConfig, timeout,
+  DEFAULT_TIMEOUT_MS, DEFAULT_REMEMBER_TIMEOUT_MS, type CogneeAuthScheme,
+} from "./config.js";
+export type { CogneeAuthScheme } from "./config.js";
 
 export interface CogneeClientOptions {
   serviceUrl: string;
@@ -38,19 +41,15 @@ export class CogneeApiClient {
   readonly #fetch: typeof globalThis.fetch;
 
   constructor(options: CogneeClientOptions) {
-    this.#baseUrl = new URL(options.serviceUrl.endsWith("/") ? options.serviceUrl : `${options.serviceUrl}/`);
+    this.#baseUrl = cogneeBaseUrl(options.serviceUrl);
     if ((options.authScheme ?? "x-api-key") !== "none" && !options.apiKey?.trim()) {
       throw new Error("Cognee API key is required unless authScheme is none");
     }
     this.#apiKey = options.apiKey;
     this.#tenantId = options.tenantId;
     this.#authScheme = options.authScheme ?? "x-api-key";
-    const timeoutMs = options.timeoutMs ?? 3000;
-    if (!Number.isFinite(timeoutMs) || timeoutMs < 100) throw new Error("Cognee timeout must be at least 100 ms");
-    this.#timeoutMs = Math.trunc(timeoutMs);
-    const rememberTimeoutMs = options.rememberTimeoutMs ?? 120_000;
-    if (!Number.isFinite(rememberTimeoutMs) || rememberTimeoutMs < 100) throw new Error("Cognee Remember timeout must be at least 100 ms");
-    this.#rememberTimeoutMs = Math.trunc(rememberTimeoutMs);
+    this.#timeoutMs = timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, "Cognee timeout");
+    this.#rememberTimeoutMs = timeout(options.rememberTimeoutMs ?? DEFAULT_REMEMBER_TIMEOUT_MS, "Cognee Remember timeout");
     this.#fetch = options.fetch ?? globalThis.fetch;
   }
 
@@ -113,8 +112,8 @@ export class CogneeApiClient {
     if (this.#authScheme === "bearer") headers.set("Authorization", `Bearer ${this.#apiKey}`);
     else if (this.#authScheme === "x-api-key") headers.set("X-Api-Key", this.#apiKey!);
     if (this.#tenantId) headers.set("X-Tenant-Id", this.#tenantId);
-    const response = await this.#fetch(new URL(path, this.#baseUrl), { ...init, headers, signal });
-    if (!response.ok) throw new Error(`Cognee API ${response.status}: ${await response.text()}`.slice(0, 1200));
+    const response = await this.#fetch(new URL(path, this.#baseUrl), { ...init, headers, signal, redirect: "error" });
+    if (!response.ok) throw new Error(`Cognee API HTTP ${response.status}`);
     const contentType = response.headers.get("content-type") ?? "";
     return contentType.includes("json") ? response.json() : response.text();
   }
@@ -153,20 +152,8 @@ function targetType(identifier: string, relation: string): string {
 }
 
 export function createCogneeClientFromEnv(env: NodeJS.ProcessEnv = process.env): CogneeApiClient | undefined {
-  const serviceUrl = env.COGNEE_SERVICE_URL?.trim();
-  const apiKey = env.COGNEE_API_KEY?.trim();
-  if (!serviceUrl) return undefined;
-  const configuredScheme = env.COGNEE_AUTH_SCHEME?.trim();
-  const authScheme = configuredScheme === "bearer" || configuredScheme === "none" ? configuredScheme : "x-api-key";
-  if (authScheme !== "none" && !apiKey) return undefined;
-  const configuredTimeout = env.WORKGRAPH_COGNEE_TIMEOUT_MS?.trim();
-  const timeoutMs = configuredTimeout ? Number(configuredTimeout) : 3000;
-  if (!Number.isFinite(timeoutMs) || timeoutMs < 100) return undefined;
-  const tenantId = env.COGNEE_TENANT_ID?.trim() || undefined;
-  const configuredRememberTimeout = env.WORKGRAPH_COGNEE_REMEMBER_TIMEOUT_MS?.trim();
-  const rememberTimeoutMs = configuredRememberTimeout ? Number(configuredRememberTimeout) : 120_000;
-  if (!Number.isFinite(rememberTimeoutMs) || rememberTimeoutMs < 100) return undefined;
-  return new CogneeApiClient({ serviceUrl, apiKey, tenantId, authScheme, timeoutMs, rememberTimeoutMs });
+  const config = readCogneeConfig(env);
+  return config ? new CogneeApiClient(config) : undefined;
 }
 
 function normalizeRecallEntry(value: unknown): CogneeRecallEntry | undefined {

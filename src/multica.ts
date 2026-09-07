@@ -71,6 +71,7 @@ export interface InitiativeResolution {
 
 export interface MulticaReaderOptions {
   binary?: string;
+  env?: NodeJS.ProcessEnv;
   run?: (command: string, args: string[]) => Promise<unknown>;
   runTimeline?: (command: string, args: string[]) => Promise<{ value: unknown; truncated: boolean }>;
   maxDepth?: number;
@@ -88,7 +89,7 @@ export class MulticaReader {
     this.#run = options.run ?? (async (command, args) => {
       const { stdout } = await execFileAsync(command, args, {
         // `agent tasks` has no task filter and can include years of agent history.
-        encoding: "utf8", timeout: 10_000, maxBuffer: MULTICA_JSON_MAX_BUFFER,
+        encoding: "utf8", timeout: 10_000, maxBuffer: MULTICA_JSON_MAX_BUFFER, env: options.env,
       });
       return JSON.parse(stdout);
     });
@@ -96,7 +97,7 @@ export class MulticaReader {
       ? async (command, args) => ({ value: await options.run!(command, args), truncated: false })
       : async (command, args) => {
           const { stdout, stderr } = await execFileAsync(command, args, {
-            encoding: "utf8", timeout: 10_000, maxBuffer: MULTICA_JSON_MAX_BUFFER,
+            encoding: "utf8", timeout: 10_000, maxBuffer: MULTICA_JSON_MAX_BUFFER, env: options.env,
           });
           return { value: JSON.parse(stdout), truncated: /timeline truncated/i.test(stderr) };
         });

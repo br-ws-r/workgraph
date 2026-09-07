@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { openDatabase, type SqliteDatabase } from "./sqlite.js";
 import { createEvent, type WorkgraphEvent, type WorkgraphEventInput } from "./schema.js";
 
 export type OutboxEventInput = WorkgraphEventInput;
@@ -21,11 +21,11 @@ export type TimelineEntry = WorkgraphEvent & {
 };
 
 export class WorkgraphOutbox {
-  readonly #db: DatabaseSync;
+  readonly #db: SqliteDatabase;
 
   constructor(readonly path: string) {
     mkdirSync(dirname(path), { recursive: true });
-    this.#db = new DatabaseSync(path);
+    this.#db = openDatabase(path);
     // Set the lock wait before negotiating WAL or creating the shared schema.
     this.#db.exec("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;");
     this.#db.exec(`
@@ -126,6 +126,7 @@ export class WorkgraphOutbox {
     return mapRow(row as Record<string, unknown>);
   }
 
+  /** Read-only diagnostic snapshot, including claimed rows; delivery must use claimPending. */
   pending(workspaceId: string, limit = 50): TimelineEntry[] {
     const bounded = boundLimit(limit);
     return (this.#db.prepare(`
@@ -133,6 +134,22 @@ export class WorkgraphOutbox {
       WHERE workspace_id = ? AND memory_record_json IS NOT NULL AND delivered_at IS NULL
       ORDER BY sequence ASC LIMIT ?
     `).all(workspaceId, bounded) as Record<string, unknown>[]).map(mapRow);
+  }
+
+  pendingCount(workspaceId: string): number {
+    const row = this.#db.prepare(`
+      SELECT COUNT(*) AS count FROM workgraph_events
+      WHERE workspace_id = ? AND memory_record_json IS NOT NULL AND delivered_at IS NULL
+    `).get(workspaceId)!;
+    return Number(row.count);
+  }
+
+  /** Release an unfinished batch immediately; crashed workers still use lease expiry. */
+  releaseClaims(owner: string): void {
+    this.#db.prepare(`
+      UPDATE workgraph_events SET claimed_by = NULL, claim_expires_at = NULL
+      WHERE claimed_by = ? AND delivered_at IS NULL
+    `).run(owner);
   }
 
   claimPending(workspaceId: string, owner: string, limit = 50, leaseMs = 30_000): TimelineEntry[] {
@@ -154,10 +171,10 @@ export class WorkgraphOutbox {
     return rows.map(mapRow).sort((left, right) => left.sequence - right.sequence);
   }
 
-  timeline(initiativeId: string, limit = 100, filter: TimelineFilter = {}): TimelineEntry[] {
+  timeline(initiativeId: string, limit = 100, filter: TimelineFilter = {}, workspaceId?: string): TimelineEntry[] {
     const bounded = boundLimit(limit);
     return (this.#db.prepare(`
-      SELECT * FROM workgraph_events WHERE initiative_id = ?
+      SELECT * FROM workgraph_events WHERE initiative_id = ? AND (? IS NULL OR workspace_id = ?)
         AND (? IS NULL OR event_id = ?)
         AND (? IS NULL OR json_extract(memory_record_json, '$.entity_identifier') = ?)
         AND (? = 'all'
@@ -165,7 +182,7 @@ export class WorkgraphOutbox {
           OR (? = 'explicit' AND memory_record_json IS NOT NULL
             AND event_id NOT LIKE 'multica-activity:%' AND event_type != 'compaction_anchor'))
       ORDER BY timestamp DESC, sequence DESC LIMIT ?
-    `).all(initiativeId, filter.eventId ?? null, filter.eventId ?? null,
+    `).all(initiativeId, workspaceId ?? null, workspaceId ?? null, filter.eventId ?? null, filter.eventId ?? null,
       filter.entityIdentifier ?? null, filter.entityIdentifier ?? null,
       filter.records ?? "all", filter.records ?? "all", filter.records ?? "all",
       bounded) as Record<string, unknown>[]).map(mapRow).reverse();

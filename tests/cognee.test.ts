@@ -8,6 +8,15 @@ const issue = "00000000-0000-4000-8000-000000000002";
 const dataset = "workgraph-workspace-brwsr";
 
 describe("Cognee remote transport", () => {
+  it("rejects redirects and omits upstream HTTP error bodies", async () => {
+    const fetch = vi.fn(async () => new Response("secret upstream diagnostic", { status: 403 }));
+    const client = new CogneeApiClient({ serviceUrl: "https://cognee.test", apiKey: "secret-key", fetch });
+    await expect(client.health()).rejects.toThrow("Cognee API HTTP 403");
+    const [, init] = fetch.mock.calls[0] as unknown as [URL, RequestInit];
+    expect(init.redirect).toBe("error");
+    await expect(client.health()).rejects.not.toThrow("secret");
+  });
+
   it("routes recall only to the configured endpoint and locked dataset", async () => {
     const fetch = vi.fn(async () => new Response(JSON.stringify([{
       source: "graph", kind: "chunk", search_type: "CHUNKS", text: "Scoped result",
@@ -149,10 +158,10 @@ describe("Cognee remote transport", () => {
     }, dataset, "hash")).rejects.toThrow("did not complete: running");
   });
 
-  it("disables invalid timeout configuration", () => {
-    expect(createCogneeClientFromEnv({
+  it("rejects invalid timeout configuration", () => {
+    expect(() => createCogneeClientFromEnv({
       COGNEE_SERVICE_URL: "http://127.0.0.1:8000", COGNEE_AUTH_SCHEME: "none",
       WORKGRAPH_COGNEE_TIMEOUT_MS: "invalid",
-    })).toBeUndefined();
+    })).toThrow("WORKGRAPH_COGNEE_TIMEOUT_MS");
   });
 });

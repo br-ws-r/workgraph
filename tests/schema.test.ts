@@ -42,6 +42,10 @@ function record(overrides: Record<string, unknown> = {}) {
 }
 
 describe("workspace memory schema", () => {
+  it("rejects scope identifiers from which no safe NodeSet can be derived", () => {
+    expect(() => MemoryRecordSchema.parse(record({ initiative_identifier: "!!!" }))).toThrow("Cannot derive NodeSets");
+  });
+
   it("defines the accepted generic ontology and versioned extraction prompt", () => {
     expect(NODE_TYPES).toEqual([
       "Initiative", "Issue", "Task", "Agent", "Squad", "Decision", "Constraint",
@@ -116,7 +120,7 @@ describe("workspace memory schema", () => {
       "workspace_identifier", "initiative_identifier", "issue_id", "issue_identifier",
       "entity_identifier", "entity_label", "node_sets", "authority", "source", "observed_at",
     ]) {
-      const invalid = record();
+      const invalid: Record<string, unknown> = record();
       delete invalid[field];
       expect(MemoryRecordSchema.safeParse(invalid).success, field).toBe(false);
     }

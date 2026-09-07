@@ -29,8 +29,7 @@ export const AUTHORITY_LEVELS = ["observed", "confirmed", "proposed", "inferred"
 export const EVENT_TYPES = [
   "initiative_selected", "run_started", "context_recalled", "decision_recorded",
   "blocker_recorded", "artifact_observed", "handoff_observed", "evidence_recorded",
-  "run_settled", "compaction_anchor", "memory_delivery_succeeded",
-  "memory_delivery_failed",
+  "run_settled", "compaction_anchor",
 ] as const;
 
 export const NodeTypeSchema = z.enum(NODE_TYPES);
@@ -145,6 +144,7 @@ export const MemoryRecordSchema = z.object({
       repositoryIdentifier: record.repository_identifier,
     });
   } catch {
+    context.addIssue({ code: "custom", path: ["node_sets"], message: "Cannot derive NodeSets from record scope" });
     return;
   }
   if (record.node_sets.length !== expected.length || record.node_sets.some((value, index) => value !== expected[index])) {

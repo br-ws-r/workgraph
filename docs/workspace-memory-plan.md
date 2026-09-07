@@ -1,5 +1,10 @@
 # Workspace-scoped Workgraph memory plan
 
+> Historical design baseline. Current implementation, OMP/Pi compatibility and
+> deployment instructions live in [architecture.md](architecture.md),
+> [deployment.md](deployment.md) and the [README](../README.md).
+
+
 ## Decision summary
 
 Workgraph remains the product, repository, package, and Pi extension that owns

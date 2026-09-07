@@ -1,7 +1,9 @@
 node_modules/
-*.js
-*.d.ts
-*.js.map
-!index.js
-!index.d.ts
-/dist/
+dist/
+*.tgz
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal

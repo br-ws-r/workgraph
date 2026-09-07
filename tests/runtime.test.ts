@@ -135,6 +135,59 @@ describe("Workgraph workspace runtime", () => {
     instance.outbox.close();
   });
 
+  it("freezes the launch environment instead of following later process changes", () => {
+    const env = { MULTICA_WORKSPACE_ID: workspace };
+    const instance = new WorkgraphRuntime({ env, outbox: outbox() });
+    env.MULTICA_WORKSPACE_ID = initiative;
+    expect(instance.env.MULTICA_WORKSPACE_ID).toBe(workspace);
+    instance.outbox.close();
+  });
+
+  it("reports missing Cognee as unavailable while retaining fresh Multica state", async () => {
+    const multica = new MulticaReader({ run: vi.fn() });
+    multica.resolveIssue = vi.fn(async () => resolution());
+    const instance = runtime({ multica });
+    instance.lockInitiative(resolution());
+    expect(await instance.context("private prompt")).toMatchObject({ memory: {}, memoryError: "Cognee is not configured" });
+    instance.outbox.close();
+  });
+
+  it("delivers old pending records to their original dataset after a workspace rename", async () => {
+    const remember = vi.fn(async (_record: MemoryRecord, _dataset: string) => ({ status: "completed" }));
+    const instance = runtime({ cognee: { remember } as unknown as CogneeApiClient });
+    const resolved = resolution();
+    instance.lockInitiative({ ...resolved, workspace: { ...resolved.workspace, slug: "renamed" } });
+    const record = memory("B-184", initiative);
+    instance.outbox.append({
+      workspaceId: workspace, initiativeId: initiative, initiativeIdentifier: "B-184", issueId: initiative,
+      issueIdentifier: "B-184", eventType: "decision_recorded", boundedSummary: record.summary,
+      source: record.source, authority: record.authority, nodeSets: record.node_sets,
+      schemaVersion: SCHEMA_VERSION, extractionPromptVersion: EXTRACTION_PROMPT_VERSION, memoryRecord: record,
+    });
+    expect(await instance.flush()).toEqual({ delivered: 1, failed: 0 });
+    expect(remember.mock.calls[0][1]).toBe("workgraph-workspace-brwsr");
+    instance.outbox.close();
+  });
+
+  it("releases unattempted deliveries when a batch exhausts its deadline", async () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const remember = vi.fn(async () => { now += 150; return { status: "completed" }; });
+    const instance = runtime({ cognee: { remember } as unknown as CogneeApiClient });
+    instance.lockInitiative(resolution());
+    const record = memory("B-184", initiative);
+    for (let i = 0; i < 2; i++) instance.outbox.append({
+      workspaceId: workspace, initiativeId: initiative, initiativeIdentifier: "B-184", issueId: initiative,
+      issueIdentifier: "B-184", eventType: "decision_recorded", boundedSummary: record.summary,
+      source: record.source, authority: record.authority, nodeSets: record.node_sets,
+      schemaVersion: SCHEMA_VERSION, extractionPromptVersion: EXTRACTION_PROMPT_VERSION, memoryRecord: record,
+    });
+    try {
+      expect(await instance.flush(25, 100)).toEqual({ delivered: 1, failed: 0 });
+      expect(instance.outbox.claimPending(workspace, "next-worker")).toHaveLength(1);
+    } finally { clock.mockRestore(); instance.outbox.close(); }
+  });
+
   it("keeps missing initiative fail-closed", async () => {
     const instance = runtime();
     await expect(instance.remember({
@@ -717,9 +770,15 @@ describe("Workgraph workspace runtime", () => {
     current.outbox.close();
   });
 
-  it("drains more than one delivery batch before shutdown closes SQLite", async () => {
+  it.each([
+    { firstDeliveryFails: false, expectedAttempts: 30, expectedPending: 0 },
+    { firstDeliveryFails: true, expectedAttempts: 25, expectedPending: 6 },
+  ])("drains shutdown batches without immediately retrying failures ($firstDeliveryFails)", async ({
+    firstDeliveryFails, expectedAttempts, expectedPending,
+  }) => {
     const resolved = resolution();
     const remember = vi.fn(async () => ({ status: "completed" }));
+    if (firstDeliveryFails) remember.mockRejectedValueOnce(new Error("Cognee unavailable"));
     const multica = new MulticaReader({ run: vi.fn() });
     multica.resolveIssue = vi.fn(async () => resolved);
     multica.issueActivities = vi.fn(async () => ({ activities: [], truncated: false }));
@@ -747,6 +806,15 @@ describe("Workgraph workspace runtime", () => {
 
     await instance.shutdown();
 
-    expect(remember).toHaveBeenCalledTimes(30);
+    expect(remember).toHaveBeenCalledTimes(expectedAttempts);
+    const persisted = new WorkgraphOutbox(instance.outbox.path);
+    try {
+      expect(persisted.pendingCount(workspace)).toBe(expectedPending);
+      if (firstDeliveryFails) {
+        // One failed row and five unattempted rows survive shutdown, without claims.
+        expect(persisted.pending(workspace).map((event) => event.deliveryAttempts)).toEqual([1, 0, 0, 0, 0, 0]);
+        expect(persisted.claimPending(workspace, "next-process")).toHaveLength(expectedPending);
+      }
+    } finally { persisted.close(); }
   });
 });

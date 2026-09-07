@@ -112,6 +112,7 @@ function fakeRuntime() {
     compact: vi.fn(async () => undefined),
     pendingCount: vi.fn(() => 2),
     timeline: vi.fn(() => []),
+    requireFreshResolution: vi.fn(async () => resolved),
     shutdown: vi.fn(async () => undefined),
   };
   return runtime as unknown as WorkgraphRuntime;
