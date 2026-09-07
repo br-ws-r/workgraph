@@ -20,7 +20,8 @@ export function openDatabase(path: string): SqliteDatabase {
     const { Database } = require("bun:sqlite") as {
       Database: new (path: string, options: { strict: boolean; create: boolean }) => SqliteDatabase;
     };
-    // strict mode supports the unprefixed named bindings used by node:sqlite.
+    // Bun strict mode accepts .run({ eventId: ... }) for SQL @eventId placeholders,
+    // matching Node's bare binding keys, and rejects missing parameters.
     return new Database(path, { strict: true, create: true });
   }
   const { DatabaseSync } = require("node:sqlite") as {

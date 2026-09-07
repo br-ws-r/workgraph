@@ -42,6 +42,12 @@ lifecycle scripts for a source install that has no `dist/`. A built tarball can 
 installed with `--ignore-scripts` instead. npm documents the Git prepare behavior
 in its [installation reference](https://docs.npmjs.com/cli/commands/npm-install).
 
+Source installation relies on npm installing the development dependencies
+(including TypeScript and Node/host types) **before** running `prepare`. The
+Git-install smoke test in CI checks that ordering. If an installation policy or
+another package manager blocks those dependencies or build scripts, use the
+prebuilt tarball route; the source tree alone is not a production artifact.
+
 Preserve this application's package.json and package-lock.json. Re-deployment
 uses `npm ci` from those files; it still needs Git access and build dependencies
 for source installation. Source pins fix Workgraph code; use a built artifact

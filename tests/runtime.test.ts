@@ -770,9 +770,15 @@ describe("Workgraph workspace runtime", () => {
     current.outbox.close();
   });
 
-  it("drains more than one delivery batch before shutdown closes SQLite", async () => {
+  it.each([
+    { firstDeliveryFails: false, expectedAttempts: 30, expectedPending: 0 },
+    { firstDeliveryFails: true, expectedAttempts: 25, expectedPending: 6 },
+  ])("drains shutdown batches without immediately retrying failures ($firstDeliveryFails)", async ({
+    firstDeliveryFails, expectedAttempts, expectedPending,
+  }) => {
     const resolved = resolution();
     const remember = vi.fn(async () => ({ status: "completed" }));
+    if (firstDeliveryFails) remember.mockRejectedValueOnce(new Error("Cognee unavailable"));
     const multica = new MulticaReader({ run: vi.fn() });
     multica.resolveIssue = vi.fn(async () => resolved);
     multica.issueActivities = vi.fn(async () => ({ activities: [], truncated: false }));
@@ -800,6 +806,15 @@ describe("Workgraph workspace runtime", () => {
 
     await instance.shutdown();
 
-    expect(remember).toHaveBeenCalledTimes(30);
+    expect(remember).toHaveBeenCalledTimes(expectedAttempts);
+    const persisted = new WorkgraphOutbox(instance.outbox.path);
+    try {
+      expect(persisted.pendingCount(workspace)).toBe(expectedPending);
+      if (firstDeliveryFails) {
+        // One failed row and five unattempted rows survive shutdown, without claims.
+        expect(persisted.pending(workspace).map((event) => event.deliveryAttempts)).toEqual([1, 0, 0, 0, 0, 0]);
+        expect(persisted.claimPending(workspace, "next-process")).toHaveLength(expectedPending);
+      }
+    } finally { persisted.close(); }
   });
 });

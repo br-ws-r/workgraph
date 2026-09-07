@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Clarify the selector default, Bun binding keys, Git build ordering and shutdown
+  retry policy; remove unused delivery event types from the exported vocabulary.
 - Keep OMP and Pi on one shared extension/runtime with separate stable entrypoints.
 - Support Bun's native SQLite for OMP; require Node 22.19+ for Node execution.
 - Remove Pi SDK runtime dependencies; add a harness-independent `./core` export.

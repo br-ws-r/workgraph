@@ -126,6 +126,7 @@ export class WorkgraphOutbox {
     return mapRow(row as Record<string, unknown>);
   }
 
+  /** Read-only diagnostic snapshot, including claimed rows; delivery must use claimPending. */
   pending(workspaceId: string, limit = 50): TimelineEntry[] {
     const bounded = boundLimit(limit);
     return (this.#db.prepare(`

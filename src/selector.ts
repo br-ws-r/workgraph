@@ -27,6 +27,7 @@ export async function selectInitiative(
   });
   const enter = "Enter initiative ID (XYZ-123)";
   const none = "No initiative";
+  // Deliberately focus "No initiative", matching the timed dialog's safe fallback.
   const dialogOptions = options ? { signal: options.signal, timeout: options.timeoutMs, initialIndex: labels.length + 1 } : undefined;
   let selected: string | undefined;
   try {

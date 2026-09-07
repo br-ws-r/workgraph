@@ -404,6 +404,8 @@ export class WorkgraphRuntime {
       this.#scope.workspaceId,
       this.#flushOwner,
       limit,
+      // Keep ownership past the HTTP batch budget to allow delivery bookkeeping.
+      // This is a grace period, not a heartbeat; expired claims remain reclaimable.
       timeoutMs + 1000,
     );
     try {
@@ -566,6 +568,8 @@ export class WorkgraphRuntime {
       const result = await this.flushNow(batchSize, timeoutMs, deadline);
       delivered += result.delivered;
       failed += result.failed;
+      // Finish the current batch, then stop on failure rather than immediately
+      // reclaiming its failed rows in a tight shutdown retry loop.
       if (result.failed > 0 || result.delivered + result.failed < batchSize) break;
     }
     return { delivered, failed };

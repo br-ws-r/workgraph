@@ -100,10 +100,19 @@ ingestion. The same SQLite file works under Node and Bun using their built-in
 SQLite implementations. WAL, a busy timeout, and conditional ownership updates
 are shared SQL rather than host-specific copies.
 
+Claims last for the batch timeout plus a one-second bookkeeping grace period.
+Shutdown finishes the current batch within its budget, then stops starting new
+batches if any delivery failed. This prevents immediate reclaims of failed rows
+in a tight retry loop. Failed and unattempted records remain durable and available
+for a later flush or process; shutdown is not a guarantee of an empty outbox.
+
 Event payloads are append-only. Delivery attempts, timestamps and bounded errors
 are mutable metadata. Pending counts use SQL COUNT over semantic records only;
 local-only lifecycle events have no delivery timestamp by design. Timeline limits
 bound returned rows, independently of backlog counts.
+Delivery outcomes update this metadata rather than emitting separate events.
+The unused `memory_delivery_succeeded`/`memory_delivery_failed` names have been
+removed from the exported event vocabulary; existing timeline rows are not rewritten.
 
 ## Configuration boundaries
 
