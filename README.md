@@ -263,6 +263,16 @@ exclude local-only events and include the full backlog, even beyond 500 records.
 
 Timeouts must be whole milliseconds between 100 and 2147483647. A supplied but
 invalid Cognee configuration is an explicit error, not silently disabled memory.
+Pi and OMP isolate initialization failures at the extension boundary: the host
+continues with an explicit unavailable warning, a diagnostic
+`initiative_memory_status` tool, and no Workgraph recall/write tools. Headless
+runs also receive unavailable-memory context before agent turns. Raw exception
+text and credential values are not exposed by this fallback. Core runtime
+construction and `workgraph doctor` retain strict validation; authentication is
+never changed to `none` automatically. Restore the authenticated launch
+environment and restart to enable memory. No outbox is opened for a missing-key
+configuration, and existing queued records are preserved.
+
 The runtime snapshots its launch environment; restart after configuration or token
 changes. Multica subprocesses receive that same environment and use the CLI's own
 server/authentication settings. Workgraph has no separate Multica API credentials.

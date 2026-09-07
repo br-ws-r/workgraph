@@ -8,6 +8,20 @@ function stringEnum<const T extends readonly string[]>(values: T): TUnsafe<T[num
   return Type.Unsafe<T[number]>({ type: "string", enum: [...values] });
 }
 
+/** Keep diagnostics available without creating a client, outbox, or write tools. */
+export function registerUnavailableTools(pi: ExtensionAPI, host: "pi" | "omp", reason: string): void {
+  pi.registerTool({
+    ...(host === "omp" ? { loadMode: "essential" as const, approval: "read" as const } : {}),
+    name: "initiative_memory_status",
+    label: "Initiative Memory Status",
+    description: "Report why Workgraph is unavailable; recall and writes are disabled for this session.",
+    parameters: Type.Object({}),
+    async execute() {
+      return result({ mode: "unavailable", available: false, reason, pending_deliveries: null });
+    },
+  });
+}
+
 export function registerTools(
   pi: ExtensionAPI,
   runtime: WorkgraphRuntime,

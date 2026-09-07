@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { resolveFromEnvironment, type InitiativeResolution } from "./multica.js";
 import { WorkgraphRuntime, type WorkgraphRuntimeOptions } from "./runtime.js";
 import { boundText } from "./schema.js";
-import { registerTools, publicMemories } from "./tools.js";
+import { registerTools, registerUnavailableTools, publicMemories } from "./tools.js";
 import { selectInitiative } from "./selector.js";
 
 export interface WorkgraphExtensionOptions extends WorkgraphRuntimeOptions {
@@ -17,7 +17,43 @@ type OmpExtensionContext = ExtensionContext & {
 
 export function createWorkgraphHostExtension(host: "pi" | "omp", options: WorkgraphExtensionOptions) {
   return function workgraphExtension(pi: ExtensionAPI): void {
-    const runtime = options.runtimeFactory?.() ?? new WorkgraphRuntime(options);
+    pi.registerFlag("initiative", {
+      description: "Use a root Multica issue identifier such as B-184 (UUID also accepted for diagnostics)",
+      type: "string",
+    });
+
+    let runtime: WorkgraphRuntime;
+    try {
+      runtime = options.runtimeFactory?.() ?? new WorkgraphRuntime(options);
+    } catch {
+      // Configuration is still strict. Isolate a failed optional runtime at the
+      // host boundary; never retry without authentication or expose raw errors.
+      const env = options.env ?? process.env;
+      const missingKey = Boolean(env.COGNEE_SERVICE_URL?.trim())
+        && env.COGNEE_AUTH_SCHEME?.trim() !== "none" && !env.COGNEE_API_KEY?.trim();
+      const reason = missingKey ? "cognee_credentials_missing" : "runtime_initialization_failed";
+      const message = missingKey
+        ? "Workgraph unavailable: Cognee credentials are missing. Use an authenticated launch environment and restart."
+        : "Workgraph unavailable: runtime initialization failed. Run workgraph doctor and restart after correcting configuration.";
+      registerUnavailableTools(pi, host, reason);
+      pi.on("session_start", (_event, ctx) => {
+        if (ctx.hasUI) {
+          ctx.ui.setStatus("workgraph", "Workgraph: unavailable");
+          ctx.ui.notify(message, "warning");
+        } else {
+          console.error(message);
+        }
+      });
+      const unavailablePrompt = (event: { systemPrompt: string | string[] }) =>
+        withSystemPrompt(event.systemPrompt, `${message} Workgraph recall and writes are disabled for this session; do not claim memory delivery or verification.`);
+      (pi.on as unknown as (event: "before_agent_start", handler: typeof unavailablePrompt) => void)(
+        "before_agent_start", unavailablePrompt,
+      );
+      pi.on("session_shutdown", (_event, ctx) => {
+        if (ctx.hasUI) ctx.ui.setStatus("workgraph", undefined);
+      });
+      return;
+    }
     let started = false;
     let workspaceChat = false;
     let bootstrapWorkspaceChat = false;
@@ -27,10 +63,6 @@ export function createWorkgraphHostExtension(host: "pi" | "omp", options: Workgr
     let shuttingDown = false;
     let settleGeneration = 0;
 
-    pi.registerFlag("initiative", {
-      description: "Use a root Multica issue identifier such as B-184 (UUID also accepted for diagnostics)",
-      type: "string",
-    });
 
     pi.on("session_start", async (_event, ctx) => {
       if (started) {

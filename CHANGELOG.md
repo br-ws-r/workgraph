@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Keep Pi and OMP usable when Workgraph runtime initialization fails, including
+  a configured Cognee URL without credentials. Report unavailable memory in
+  UI/headless output, prompt context and a diagnostic status tool; do not relax
+  authentication or register recall/write tools.
+
 - Clarify the selector default, Bun binding keys, Git build ordering and shutdown
   retry policy; remove unused delivery event types from the exported vocabulary.
 - Keep OMP and Pi on one shared extension/runtime with separate stable entrypoints.
