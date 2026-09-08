@@ -87,6 +87,11 @@ describe("useful memory without replay or transcript capture", () => {
     expect(audit).toHaveBeenCalledWith(expect.anything(), "retrieved", expect.objectContaining({
       initiativeIds: ["handoff:fix-images"], workspaceIds: [], metrics: expect.objectContaining({ initiative: expect.objectContaining({ received: 1, valid: 1, retried: false, retained: 1 }) }),
     }));
+    f.runtime.auditInjected(["handoff:fix-images"], [], context.memory);
+    expect(audit.mock.calls[1][2]).toMatchObject({
+      recallId: (audit.mock.calls[0][2] as { recallId: string }).recallId,
+      initiativeIds: ["handoff:fix-images"], workspaceIds: [],
+    });
     expect(JSON.stringify(audit.mock.calls)).not.toContain("provider secret");
     f.outbox.close();
   });

@@ -109,7 +109,7 @@ not a guarantee to find other initiatives if all candidates belong to this one.
 
 `workgraph_recall_audit` stores task/run identity, timestamps and JSON details for
 scoped retrieval and automatic initiative prompt preparation. `retrieved`
-records received/valid counts (last attempt), retries, retained IDs, lane/total
+records a correlation ID shared with prompt preparation, received/valid counts (last attempt), retries, retained IDs, lane/total
 latency and safe error codes. `injected` records the IDs actually selected for
 the returned system-prompt hook. Entire records must fit the character budget;
 serialized JSON is never clipped mid-record. No query, summary, full prompt,

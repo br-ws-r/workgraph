@@ -108,6 +108,7 @@ export class WorkgraphRuntime {
   readonly cognee?: CogneeApiClient;
   readonly multica: MulticaReader;
   readonly #flushOwner = randomUUID();
+  readonly #recallIds = new WeakMap<WorkgraphRecall, string>();
   readonly #deliveryTimeoutMs: number;
   #scope?: WorkgraphScope;
   #writes = Promise.resolve<unknown>(undefined);
@@ -484,6 +485,8 @@ export class WorkgraphRuntime {
     const boundedTopK = Math.min(20, Math.max(1, Math.trunc(topK)));
     const activeInitiativeNodeSet = initiativeNodeSet(this.#scope.initiativeIdentifier);
     const result: WorkgraphRecall = {};
+    const recallId = randomUUID();
+    this.#recallIds.set(result, recallId);
     const startedAt = Date.now();
     const metrics: Record<string, object> = {};
     let failure: unknown;
@@ -509,7 +512,7 @@ export class WorkgraphRuntime {
       }
     }
     this.outbox.auditRecall(this.#scope, "retrieved", {
-      durationMs: Date.now() - startedAt, scope, metrics, errors: result.errors ?? {},
+      recallId, durationMs: Date.now() - startedAt, scope, metrics, errors: result.errors ?? {},
       initiativeIds: result.initiative?.map((m) => m.entityIdentifier) ?? [],
       workspaceIds: result.workspace?.map((m) => m.entityIdentifier) ?? [],
     });
@@ -520,8 +523,10 @@ export class WorkgraphRuntime {
     return result;
   }
 
-  auditInjected(initiativeIds: string[], workspaceIds: string[]): void {
-    if (this.#scope) this.outbox.auditRecall(this.#scope, "injected", { initiativeIds, workspaceIds });
+  auditInjected(initiativeIds: string[], workspaceIds: string[], memory: WorkgraphRecall): void {
+    if (this.#scope) this.outbox.auditRecall(this.#scope, "injected", {
+      recallId: this.#recallIds.get(memory), initiativeIds, workspaceIds,
+    });
   }
 
   private async reconcileActivityNow(): Promise<{ captured: number; resolution: InitiativeResolution }> {

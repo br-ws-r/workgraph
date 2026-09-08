@@ -152,7 +152,7 @@ export function createWorkgraphHostExtension(host: "pi" | "omp", options: Workgr
         const initiativeMemory = JSON.stringify(initiativeItems);
         const workspaceHistory = JSON.stringify(workspaceItems);
         runtime.auditInjected(initiativeItems.map((item) => item.entity_identifier),
-          workspaceItems.map((item) => item.entity_identifier));
+          workspaceItems.map((item) => item.entity_identifier), context.memory);
         const memoryStatus = context.memoryError
           ? `Cognee recall partially or fully unavailable; failed lanes: ${Object.keys(context.memory.errors ?? {}).join(", ") || "all"}. Successful lane results below remain usable as historical context.`
           : "Cognee recall completed for this turn.";

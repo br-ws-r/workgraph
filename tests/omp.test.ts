@@ -194,7 +194,7 @@ describe("Workgraph OMP extension", () => {
     expect(result.systemPrompt).toHaveLength(3);
     expect(result.systemPrompt.slice(0, 2)).toEqual(["Base prompt", "Policy prompt"]);
     expect(result.systemPrompt[2]).toContain("Authoritative current state");
-    expect(runtime.auditInjected).toHaveBeenCalledWith([], []);
+    expect(runtime.auditInjected).toHaveBeenCalledWith([], [], { initiative: [], workspace: [] });
   });
 
   it("defers settlement until OMP is idle with no pending messages", async () => {
