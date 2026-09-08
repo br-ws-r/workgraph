@@ -1,4 +1,4 @@
-import type { MulticaActivity } from "./multica.js";
+import type { MulticaActivity, MulticaHandoff } from "./multica.js";
 import { boundText } from "./schema.js";
 
 export function summarizeActivity(activity: MulticaActivity, issueIdentifier: string): string {
@@ -44,4 +44,15 @@ function detailValue(value: unknown): string | undefined {
   return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
     ? boundText(String(value), 300)
     : undefined;
+}
+
+/** Retain a bounded authored handoff excerpt, never infer an outcome from status. */
+export function summarizeHandoff(comment: MulticaHandoff): string | undefined {
+  if (comment.actor_type !== "agent" || !comment.source_task_id) return undefined;
+  // The standard handoff contract starts with a state and a short narrative.
+  // Full attachments, fenced logs, transcripts and arbitrary comments are not ingested.
+  const paragraph = comment.content.trim().split(/\n\s*\n|```/)[0].trim();
+  if (!/^(?:DONE|BLOCKED|IN PROGRESS)\.\s+\S/.test(paragraph) || paragraph.length < 50) return undefined;
+  if (/-----BEGIN|Bearer\s+|gh[pousr]_|github_pat_|sk-[A-Za-z0-9]{24}|(?:password|api[_-]?key|token)\s*[=:]/i.test(paragraph)) return undefined;
+  return boundText(paragraph.replace(/\[([^\]]+)\]\(mention:\/\/[^)]+\)/g, "$1"), 1800);
 }

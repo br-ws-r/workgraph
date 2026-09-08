@@ -77,6 +77,7 @@ function fakeRuntime() {
       resolveIssue: vi.fn(), resolveTask: vi.fn(), recentRootInitiatives: vi.fn(),
     },
     lockInitiative: vi.fn(),
+    auditInjected: vi.fn(),
     context: vi.fn(async () => ({
       resolution: resolved,
       memory: {
@@ -147,6 +148,7 @@ describe("Workgraph Pi extension", () => {
     expect(runtime.context).toHaveBeenCalledWith("What should I do?", ctx.signal);
     expect(result.systemPrompt).toContain("Base prompt");
     expect(result.systemPrompt).toContain("Authoritative current state");
+    expect(runtime.auditInjected).toHaveBeenCalledOnce();
     expect(result.systemPrompt).toContain('"issue_identifier":"B-185"');
     expect(result.systemPrompt).toContain('"initiative_identifier":"B-184"');
     expect(result.systemPrompt).not.toContain(issueId);
@@ -180,7 +182,7 @@ describe("Workgraph Pi extension", () => {
     }, context().context);
 
     expect(result.systemPrompt).toContain("Current issue");
-    expect(result.systemPrompt).toContain("Cognee recall unavailable");
+    expect(result.systemPrompt).toContain("Cognee recall partially or fully unavailable");
   });
 
   it("automatically recalls workspace memory once in a fresh verified chat", async () => {

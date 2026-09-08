@@ -68,8 +68,7 @@ time. For managed/explicit launches there is no selector or selection timer.
 ## Activity reconciliation
 
 The first successful snapshot persists a baseline of activity UUIDs without
-importing old history. Later reads use `issue timeline --activity-only --output
-json`, verify current scope, and append unseen server events with deterministic
+importing old history. Later reads use `issue timeline --output json`, verify current scope, and append unseen server activity locally with deterministic
 `multica-activity:<uuid>` IDs. The event is committed before marking the UUID seen:
 a crash between those writes safely retries the append. Competing processes keep
 the first event payload; reconciliation is not a strict total order of remote
@@ -84,6 +83,39 @@ Supported summaries cover Multica v0.4.35 status, priority, title, assignee type
 dates, task outcome and squad evaluation activity. This is not a full audit feed
 for labels, metadata, attachments or every Multica workspace object. Unknown
 actions produce a bounded generic description instead of retaining raw details.
+
+Agent-authored comments with a `source_task_id` and the standard `DONE.`,
+`BLOCKED.` or `IN PROGRESS.` prefix produce a bounded `Handoff` record. Only
+its first narrative paragraph (at most 1,800 characters) is retained, excluding
+fenced logs and credential-shaped paragraphs. The original comment UUID is the
+source revision and part of the source URL; `observed` means the agent said it,
+not that Workgraph independently verified its claims. Generic activity is kept
+in SQLite without a Cognee document. Explicit remember remains available for
+more structured decisions, outcomes and evidence that do not fit this excerpt.
+
+A separate transactional handoff baseline marks existing comments seen when
+capture is first enabled. No old events, delivered rows or comments are replayed.
+Subsequent comments are idempotent by server UUID; comment edits are not reindexed.
+The old log/outbox is preserved; additive capture/audit tables need no reset.
+
+## Recall quality and diagnostics
+
+Initiative and related-workspace lanes fail independently. A successful lane is
+retained even when the other lane fails; returned errors name unavailable lanes
+without persisting provider error text. Single-lane explicit tools still fail
+on a recall error. Workspace selection fetches up to 20 candidates for `both`
+then removes current-initiative records. This remains bounded post-filtering,
+not a guarantee to find other initiatives if all candidates belong to this one.
+
+`workgraph_recall_audit` stores task/run identity, timestamps and JSON details for
+scoped retrieval and automatic initiative prompt preparation. `retrieved`
+records a correlation ID shared with prompt preparation, received/valid counts (last attempt), retries, retained IDs, lane/total
+latency and safe error codes. `injected` records the IDs actually selected for
+the returned system-prompt hook. Entire records must fit the character budget;
+serialized JSON is never clipped mid-record. No query, summary, full prompt,
+credential or provider error body is stored in this audit. Prompt preparation
+does not prove that a model used a memory in a decision. Workspace-only chat
+recall is outside this scoped audit; existing chat behavior remains unchanged.
 
 ## Delivery and storage
 

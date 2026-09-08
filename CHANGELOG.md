@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Capture bounded, sourced agent handoff narratives as observed memory; retain
+  generic status/task activity only in the exact SQLite timeline. Baseline old
+  comments without replaying them, preserving all existing data.
+- Keep successful initiative/workspace recall lanes on partial failure, fit
+  complete records into prompts, and audit scoped retrieval and inserted IDs
+  with counts/latency under both Pi and OMP. No new model or provider dependency.
+
+
 - Keep Pi and OMP usable when Workgraph runtime initialization fails, including
   a configured Cognee URL without credentials. Report unavailable memory in
   UI/headless output, prompt context and a diagnostic status tool; do not relax

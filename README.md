@@ -20,7 +20,7 @@ not require a memory migration.
 - Uses the verified workspace's Cognee dataset and the root issue's initiative NodeSet.
 - Recalls current-initiative context and bounded related workspace history.
 - Records sourced decisions, blockers, artifacts, evidence, and compaction anchors.
-- Reconciles new Multica activity and keeps an exact local event timeline.
+- Captures bounded agent handoff narratives in Cognee; keeps generic Multica activity in the local timeline.
 - Queues semantic writes durably when Cognee is unavailable.
 
 Multica remains authoritative for assignments and workflow state. Cognee recall
@@ -211,7 +211,7 @@ separately to verify remote readability.
 `initiative_timeline` is explicitly labelled `storage: "local_outbox"`. Its
 optional exact `event_id` and `entity_identifier` filters run before the limit,
 so an older write is not hidden behind recent status events. `records: "explicit"`
-shows authored memory; `records: "activity"` shows automatic Multica activity.
+shows semantic memory (including captured handoffs); `records: "activity"` shows local Multica activity.
 The default `all` view retains the full audit timeline. Graph relations and
 NodeSets are included for inspection.
 
@@ -324,3 +324,17 @@ peer for extension types and a development dependency for compatibility checks.
 
 Workgraph derives from [`@kerryhatcher/pi-cognee`](https://github.com/kerryhatcher/pi-cognee)
 and retains the upstream MIT [license](LICENSE).
+
+### Memory quality diagnostics
+
+For scoped runs, `workgraph_recall_audit` in the existing SQLite outbox records
+retrieval counts/latency/IDs and IDs selected for automatic prompt insertion.
+Inspect it read-only; it contains no full prompts or recalled summaries. See
+[architecture](docs/architecture.md#recall-quality-and-diagnostics) for exact
+semantics and limitations. Successful recall is not proof of decision impact.
+
+New standard agent handoffs are captured as observed narrative excerpts with a
+comment source link. Put the useful diagnosis, decision and verified result in
+the opening paragraph; use `initiative_memory_remember` for additional sourced,
+structured knowledge. Status-only events stay local. Existing history is not
+replayed when this capture mode is first enabled.
