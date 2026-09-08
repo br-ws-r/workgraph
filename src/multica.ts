@@ -49,6 +49,13 @@ const MulticaActivitySchema = z.object({
   details: z.record(z.string(), z.unknown()).default({}),
 }).passthrough();
 
+const MulticaHandoffSchema = z.object({
+  id: UuidSchema, type: z.literal("comment"), actor_type: z.string(),
+  source_task_id: UuidSchema.nullish(), created_at: z.string().datetime({ offset: true }),
+  content: z.string(),
+});
+export type MulticaHandoff = z.infer<typeof MulticaHandoffSchema>;
+
 export type MulticaIssue = z.infer<typeof MulticaIssueSchema>;
 export type MulticaActivity = z.infer<typeof MulticaActivitySchema>;
 export type MulticaWorkspace = z.infer<typeof MulticaWorkspaceSchema>;
@@ -56,6 +63,7 @@ export type MulticaProject = z.infer<typeof MulticaProjectSchema>;
 
 export interface MulticaActivityResult {
   activities: MulticaActivity[];
+  handoffs?: MulticaHandoff[];
   truncated: boolean;
 }
 
@@ -233,11 +241,14 @@ export class MulticaReader {
     const expectedIssue = requiredUuid(issueId, "Multica issue");
     const result = await this.#runTimeline(this.#binary, [
       ...workspacePrefix(expectedWorkspace), "issue", "timeline", expectedIssue,
-      "--activity-only", "--output", "json",
+      "--output", "json",
     ]);
     if (!Array.isArray(result.value)) throw new Error("Multica issue activity response is not a list");
     return {
-      activities: result.value.map((value) => MulticaActivitySchema.parse(value)),
+      activities: result.value.filter((value) => !isRecord(value) || value.type !== "comment")
+        .map((value) => MulticaActivitySchema.parse(value)),
+      handoffs: result.value.filter((value) => isRecord(value) && value.type === "comment")
+        .map((value) => MulticaHandoffSchema.parse(value)),
       truncated: result.truncated,
     };
   }

@@ -94,6 +94,7 @@ export function registerTools(
       return result({
         initiative: publicMemories(recalled.initiative ?? []),
         workspace: publicMemories(recalled.workspace ?? []),
+        ...(recalled.errors ? { errors: recalled.errors } : {}),
       });
     },
   });

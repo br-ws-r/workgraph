@@ -7,10 +7,9 @@ import {
 import {
   MulticaReader,
   type InitiativeResolution,
-  type MulticaActivity,
   type MulticaWorkspace,
 } from "./multica.js";
-import { summarizeActivity } from "./activity.js";
+import { summarizeActivity, summarizeHandoff } from "./activity.js";
 import { recallValidMemories } from "./recall.js";
 import { WorkgraphOutbox, type TimelineEntry, type TimelineFilter } from "./outbox.js";
 import {
@@ -67,6 +66,7 @@ export interface RecalledMemory {
 export interface WorkgraphRecall {
   initiative?: RecalledMemory[];
   workspace?: RecalledMemory[];
+  errors?: Partial<Record<"initiative" | "workspace", "recall_failed">>;
 }
 
 export interface WorkgraphContext {
@@ -197,7 +197,7 @@ export class WorkgraphRuntime {
     source: string,
     authority: Authority,
     memoryRecord?: MemoryRecord,
-    identity?: { eventId?: string; timestamp?: string },
+    identity?: { eventId?: string; timestamp?: string; sourceRevision?: string },
   ): TimelineEntry | undefined {
     if (!this.#scope) return undefined;
     const nodeSets = memoryRecord?.node_sets ?? deriveNodeSets({
@@ -223,7 +223,7 @@ export class WorkgraphRuntime {
       eventType,
       boundedSummary: boundText(summary, 4000),
       source,
-      sourceRevision: memoryRecord?.source_revision,
+      sourceRevision: memoryRecord?.source_revision ?? identity?.sourceRevision,
       authority,
       nodeSets,
       schemaVersion: SCHEMA_VERSION,
@@ -261,7 +261,8 @@ export class WorkgraphRuntime {
   async context(query: string, signal?: AbortSignal): Promise<WorkgraphContext> {
     const resolution = await this.requireFreshResolution();
     try {
-      return { resolution, memory: await this.recallVerified(query, "both", 8, signal) };
+      const memory = await this.recallVerified(query, "both", 8, signal);
+      return { resolution, memory, ...(memory.errors ? { memoryError: "Some memory lanes are unavailable" } : {}) };
     } catch (error) {
       return {
         resolution,
@@ -483,30 +484,44 @@ export class WorkgraphRuntime {
     const boundedTopK = Math.min(20, Math.max(1, Math.trunc(topK)));
     const activeInitiativeNodeSet = initiativeNodeSet(this.#scope.initiativeIdentifier);
     const result: WorkgraphRecall = {};
-    if (scope === "initiative" || scope === "both") {
-      const memories = await recallValidMemories(this.cognee, boundedQuery, this.#scope.dataset, {
-        topK: boundedTopK,
-        nodeNames: [activeInitiativeNodeSet],
-        signal,
-      });
-      result.initiative = memories
-        .filter((record) => record.workspaceId === this.#scope!.workspaceId
-          && record.initiativeId === this.#scope!.initiativeId
-          && record.initiativeIdentifier === this.#scope!.initiativeIdentifier)
-        .slice(0, boundedTopK);
+    const startedAt = Date.now();
+    const metrics: Record<string, object> = {};
+    let failure: unknown;
+    const lanes = scope === "both" ? ["initiative", "workspace"] as const : [scope];
+    for (const lane of lanes) {
+      const laneStartedAt = Date.now();
+      try {
+        const memories = await recallValidMemories(this.cognee, boundedQuery, this.#scope.dataset, {
+          topK: lane === "workspace" && scope === "both" ? 20 : boundedTopK,
+          ...(lane === "initiative" ? { nodeNames: [activeInitiativeNodeSet] } : {}), signal,
+        }, (stats) => { metrics[lane] = stats; });
+        result[lane] = memories.filter((record) => record.workspaceId === this.#scope!.workspaceId
+          && (lane === "initiative"
+            ? record.initiativeId === this.#scope!.initiativeId && record.initiativeIdentifier === this.#scope!.initiativeIdentifier
+            : record.initiativeId !== this.#scope!.initiativeId))
+          .slice(0, lane === "workspace" && scope === "both" ? 4 : boundedTopK);
+      } catch (error) {
+        failure = error;
+        (result.errors ??= {})[lane] = "recall_failed";
+      } finally {
+        metrics[lane] = { ...metrics[lane], durationMs: Date.now() - laneStartedAt,
+          retained: result[lane]?.length ?? 0 };
+      }
     }
-    if (scope === "workspace" || scope === "both") {
-      const memories = await recallValidMemories(this.cognee, boundedQuery, this.#scope.dataset, {
-        topK: scope === "both" ? Math.min(20, Math.max(12, boundedTopK * 3)) : boundedTopK,
-        signal,
-      });
-      result.workspace = memories
-        .filter((record) => record.workspaceId === this.#scope!.workspaceId
-          && record.initiativeId !== this.#scope!.initiativeId)
-        .slice(0, scope === "both" ? 4 : boundedTopK);
-    }
-    this.append("context_recalled", `Recalled ${scope} context.`, "cognee://recall", "inferred");
+    this.outbox.auditRecall(this.#scope, "retrieved", {
+      durationMs: Date.now() - startedAt, scope, metrics, errors: result.errors ?? {},
+      initiativeIds: result.initiative?.map((m) => m.entityIdentifier) ?? [],
+      workspaceIds: result.workspace?.map((m) => m.entityIdentifier) ?? [],
+    });
+    if (scope !== "both" && result.errors) throw failure;
+    if (result.initiative || result.workspace) this.append("context_recalled",
+      `Recalled ${scope} context: initiative=${result.initiative?.length ?? 0}, workspace=${result.workspace?.length ?? 0}, failed=${Object.keys(result.errors ?? {}).join(",") || "none"}.`,
+      "cognee://recall", "inferred");
     return result;
+  }
+
+  auditInjected(initiativeIds: string[], workspaceIds: string[]): void {
+    if (this.#scope) this.outbox.auditRecall(this.#scope, "injected", { initiativeIds, workspaceIds });
   }
 
   private async reconcileActivityNow(): Promise<{ captured: number; resolution: InitiativeResolution }> {
@@ -521,6 +536,13 @@ export class WorkgraphRuntime {
     try {
       result = await this.multica.issueActivities(this.#scope.issueId, this.#scope.workspaceId);
       resolution = await this.requireFreshResolution();
+      const activityIds = [...result.activities.map((activity) => activity.id), ...(result.handoffs ?? []).map((comment) => comment.id)];
+      if (!needsBaseline && result.truncated && !activityIds.some((activityId) =>
+        this.outbox.hasSeenActivity(this.#scope!.workspaceId, this.#scope!.issueId, activityId))) {
+        throw new Error("Multica activity history was truncated without overlap with Workgraph history");
+      }
+      this.outbox.initializeHandoffBaseline(this.#scope.workspaceId, this.#scope.issueId,
+        (result.handoffs ?? []).map((comment) => comment.id));
       if (needsBaseline) {
         this.outbox.initializeActivityBaseline(
           this.#scope.workspaceId,
@@ -533,29 +555,31 @@ export class WorkgraphRuntime {
       if (needsBaseline) this.outbox.markActivityBaselineFailed(this.#scope.workspaceId, this.#scope.issueId);
       throw error;
     }
-    const activityIds = result.activities.map((activity) => activity.id);
-    if (result.truncated && !activityIds.some((activityId) =>
-      this.outbox.hasSeenActivity(this.#scope!.workspaceId, this.#scope!.issueId, activityId))) {
-      throw new Error("Multica activity history was truncated without overlap with Workgraph history");
-    }
     let captured = 0;
     for (const activity of result.activities) {
       if (this.outbox.hasSeenActivity(this.#scope.workspaceId, this.#scope.issueId, activity.id)) continue;
-      this.rememberVerified({
-        entityType: "Evidence",
-        authority: "observed",
-        entityIdentifier: activityEntityIdentifier(activity, this.#scope.issueIdentifier),
-        entityLabel: activityEntityLabel(activity, this.#scope.issueIdentifier),
-        summary: summarizeActivity(activity, resolution.issue.identifier),
-        source: `${this.issueSource()}/activity`,
-        sourceRevision: activity.id,
-        relations: [{ type: "observed_in", target: `issue:${this.#scope.issueIdentifier}` }],
-        eventType: "evidence_recorded",
-        eventId: `multica-activity:${activity.id}`,
-        observedAt: activity.created_at,
-      }, resolution, false);
+      // Preserve exact operational chronology locally without paying to graph/embed it.
+      this.append("evidence_recorded", summarizeActivity(activity, resolution.issue.identifier),
+        `${this.issueSource()}/activity`, "observed", undefined,
+        { eventId: `multica-activity:${activity.id}`, timestamp: activity.created_at, sourceRevision: activity.id });
       this.outbox.markActivitySeen(this.#scope.workspaceId, this.#scope.issueId, activity.id);
       captured += 1;
+    }
+    for (const comment of result.handoffs ?? []) {
+      if (this.outbox.hasSeenActivity(this.#scope.workspaceId, this.#scope.issueId, comment.id)) continue;
+      const summary = summarizeHandoff(comment);
+      if (summary) {
+        this.rememberVerified({
+          entityType: "Handoff", authority: "observed", summary,
+          entityIdentifier: `handoff:${this.#scope.issueIdentifier.toLowerCase()}:${createHash("sha256").update(comment.id).digest("hex").slice(0,16)}`,
+          entityLabel: `${this.#scope.issueIdentifier} agent handoff`,
+          source: `${this.issueSource()}/comments/${comment.id}`, sourceRevision: comment.id,
+          relations: [{ type: "about", target: `issue:${this.#scope.issueIdentifier}` }],
+          eventType: "handoff_observed", eventId: `multica-handoff:${comment.id}`, observedAt: comment.created_at,
+        }, resolution, false);
+        captured += 1;
+      }
+      this.outbox.markActivitySeen(this.#scope.workspaceId, this.#scope.issueId, comment.id);
     }
     return { captured, resolution };
   }
@@ -658,14 +682,6 @@ function validateResolutionLinks(resolution: InitiativeResolution): void {
 function semanticRecordIdentifier(kind: string, issueIdentifier: string, observedAt: string, seed: string = randomUUID()): string {
   const timestamp = observedAt.replace(/[-:.]/g, "").replace(/Z$/, "Z");
   return `${kind.replace(/_/g, "-")}:${issueIdentifier}:${timestamp}:${shortHash(seed)}`;
-}
-
-function activityEntityIdentifier(activity: MulticaActivity, issueIdentifier: string): string {
-  return semanticRecordIdentifier(`evidence-${activity.action}`, issueIdentifier, activity.created_at, activity.id);
-}
-
-function activityEntityLabel(activity: MulticaActivity, issueIdentifier: string): string {
-  return `${issueIdentifier} ${activity.action.replace(/_/g, " ")}`;
 }
 
 function shortHash(value: string): string {

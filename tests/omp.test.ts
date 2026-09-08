@@ -49,6 +49,7 @@ function fakeRuntime(env: NodeJS.ProcessEnv = {}) {
       issueIdentifier: "B-195",
       rootTitle: "OMP compatibility",
     })),
+    auditInjected: vi.fn(),
     context: vi.fn(async () => ({ resolution: resolved, memory: { initiative: [], workspace: [] } })),
     workspaceContext: vi.fn(),
     recall: vi.fn(async () => ({ initiative: [] })),
@@ -193,6 +194,7 @@ describe("Workgraph OMP extension", () => {
     expect(result.systemPrompt).toHaveLength(3);
     expect(result.systemPrompt.slice(0, 2)).toEqual(["Base prompt", "Policy prompt"]);
     expect(result.systemPrompt[2]).toContain("Authoritative current state");
+    expect(runtime.auditInjected).toHaveBeenCalledWith([], []);
   });
 
   it("defers settlement until OMP is idle with no pending messages", async () => {

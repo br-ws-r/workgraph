@@ -63,6 +63,15 @@ export class WorkgraphOutbox {
       CREATE INDEX IF NOT EXISTS workgraph_events_workspace_pending
         ON workgraph_events (workspace_id, delivered_at, sequence)
         WHERE memory_record_json IS NOT NULL;
+      CREATE TABLE IF NOT EXISTS workgraph_recall_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT NOT NULL, workspace_id TEXT NOT NULL, issue_id TEXT,
+        task_id TEXT, run_id TEXT, phase TEXT NOT NULL, details_json TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS multica_handoff_state (
+        workspace_id TEXT NOT NULL, issue_id TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, issue_id)
+      );
       CREATE TABLE IF NOT EXISTS multica_activity_state (
         workspace_id TEXT NOT NULL,
         issue_id TEXT NOT NULL,
@@ -224,6 +233,26 @@ export class WorkgraphOutbox {
       this.#db.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  // Independent baseline prevents a rollout from replaying historical comments.
+  initializeHandoffBaseline(workspaceId: string, issueId: string, ids: string[]): boolean {
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.#db.prepare("INSERT OR IGNORE INTO multica_handoff_state VALUES (?, ?)").run(workspaceId, issueId);
+      const initialized = Number(result.changes) === 1;
+      if (initialized) for (const id of ids) this.markActivitySeen(workspaceId, issueId, id);
+      this.#db.exec("COMMIT");
+      return initialized;
+    } catch (error) { this.#db.exec("ROLLBACK"); throw error; }
+  }
+
+  auditRecall(identity: { workspaceId: string; issueId?: string; taskId?: string; runId?: string },
+    phase: "retrieved" | "injected", details: object): void {
+    this.#db.prepare(`INSERT INTO workgraph_recall_audit
+      (timestamp, workspace_id, issue_id, task_id, run_id, phase, details_json) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(new Date().toISOString(), identity.workspaceId, identity.issueId ?? null,
+        identity.taskId ?? null, identity.runId ?? null, phase, JSON.stringify(details));
   }
 
   markActivityBaselineFailed(workspaceId: string, issueId: string): void {

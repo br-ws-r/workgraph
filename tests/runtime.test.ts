@@ -378,9 +378,9 @@ describe("Workgraph workspace runtime", () => {
 
     const context = await instance.context("decision");
 
-    expect(context.memory).toEqual({});
-    expect(context.memoryError).toContain("no valid Workgraph records after one retry");
-    expect(cognee.recall).toHaveBeenCalledTimes(2);
+    expect(context.memory).toEqual({ errors: { initiative: "recall_failed", workspace: "recall_failed" } });
+    expect(context.memoryError).toContain("Some memory lanes are unavailable");
+    expect(cognee.recall).toHaveBeenCalledTimes(4);
     instance.outbox.close();
   });
 
@@ -466,8 +466,8 @@ describe("Workgraph workspace runtime", () => {
     const context = await instance.context("query");
 
     expect(context.resolution).toBe(resolved);
-    expect(context.memory).toEqual({});
-    expect(context.memoryError).toContain("Cognee unavailable");
+    expect(context.memory).toEqual({ errors: { initiative: "recall_failed", workspace: "recall_failed" } });
+    expect(context.memoryError).toContain("Some memory lanes are unavailable");
     instance.outbox.close();
   });
 
@@ -605,11 +605,8 @@ describe("Workgraph workspace runtime", () => {
       authority: "observed",
     });
     expect(captured[0].boundedSummary).not.toContain("must not be copied");
-    expect(captured[0].memoryRecord).toMatchObject({
-      entity_identifier: expect.stringMatching(/^evidence-status-changed:B-185:20260904T100001Z:[a-f0-9]{10}$/),
-      entity_label: "B-185 status changed",
-      observed_at: second.created_at,
-    });
+    expect(captured[0].memoryRecord).toBeUndefined();
+    expect(instance.outbox.pendingCount(workspace)).toBe(0);
     instance.outbox.close();
   });
 

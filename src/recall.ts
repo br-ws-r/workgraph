@@ -29,16 +29,21 @@ export async function recallValidMemories(
   query: string,
   dataset: string,
   options: CogneeRecallOptions,
+  onStats?: (stats: { received: number; valid: number; retried: boolean }) => void,
 ): Promise<RecalledMemory[]> {
   let entries = await cognee.recall(query, dataset, options);
   let memories = normalizeMemories(entries);
+  let retried = false;
   if (entries.length > 0 && memories.length === 0) {
+    retried = true;
     entries = await cognee.recall(query, dataset, options);
     memories = normalizeMemories(entries);
     if (memories.length === 0) {
+      onStats?.({ received: entries.length, valid: 0, retried });
       throw new Error("Cognee Recall returned no valid Workgraph records after one retry");
     }
   }
+  onStats?.({ received: entries.length, valid: memories.length, retried });
   return memories;
 }
 

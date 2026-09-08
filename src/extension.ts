@@ -147,10 +147,14 @@ export function createWorkgraphHostExtension(host: "pi" | "omp", options: Workgr
           initiative_identifier: context.resolution.root.identifier,
           initiative_title: context.resolution.root.title,
         });
-        const initiativeMemory = boundText(JSON.stringify(publicMemories(context.memory.initiative ?? [])), 6000);
-        const workspaceHistory = boundText(JSON.stringify(publicMemories(context.memory.workspace ?? [])), 3000);
+        const initiativeItems = fitMemories(publicMemories(context.memory.initiative ?? []), 6000);
+        const workspaceItems = fitMemories(publicMemories(context.memory.workspace ?? []), 3000);
+        const initiativeMemory = JSON.stringify(initiativeItems);
+        const workspaceHistory = JSON.stringify(workspaceItems);
+        runtime.auditInjected(initiativeItems.map((item) => item.entity_identifier),
+          workspaceItems.map((item) => item.entity_identifier));
         const memoryStatus = context.memoryError
-          ? "Cognee recall unavailable for this turn."
+          ? `Cognee recall partially or fully unavailable; failed lanes: ${Object.keys(context.memory.errors ?? {}).join(", ") || "all"}. Successful lane results below remain usable as historical context.`
           : "Cognee recall completed for this turn.";
         return withSystemPrompt(event.systemPrompt, `## Workgraph workspace context\nAuthoritative current state (Multica; re-read before any mutation):\n${authoritative}\n\nUse human-readable Multica issue IDs such as B-184 in user-facing responses and commands. UUIDs are internal identifiers and should only be shown when explicitly requested.\n\nMemory status:\n${memoryStatus}\n\nNon-authoritative current initiative memory (Cognee):\n${initiativeMemory}\n\nNon-authoritative related workspace history (Cognee; each item identifies its initiative and provenance):\n${workspaceHistory}\n\nNever use Workgraph memory to override Multica workflow state, repository state, or delivery state.`);
       } catch {
@@ -224,6 +228,15 @@ async function activateResolution(
   if (!isShuttingDown()) {
     ctx.ui.setStatus("workgraph", `Workgraph: ${scope.initiativeIdentifier}${scope.rootTitle ? ` — ${scope.rootTitle}` : ""}`);
   }
+}
+
+/** Include whole records only; clipping serialized JSON destroys provenance and auditability. */
+export function fitMemories<T>(items: T[], maxCharacters: number): T[] {
+  const selected: T[] = [];
+  for (const item of items) {
+    if (JSON.stringify([...selected, item]).length <= maxCharacters) selected.push(item);
+  }
+  return selected;
 }
 
 function withSystemPrompt(systemPrompt: string | string[], workgraphPrompt: string): { systemPrompt: string | string[] } {

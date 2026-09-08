@@ -217,7 +217,7 @@ describe("Multica v0.4.35 initiative resolution", () => {
     ]);
   });
 
-  it("reads and validates the chronological Multica activity-only timeline", async () => {
+  it("reads and validates the chronological Multica timeline", async () => {
     const runTimeline = vi.fn(async () => ({
       truncated: true,
       value: [
@@ -236,8 +236,19 @@ describe("Multica v0.4.35 initiative resolution", () => {
     expect(result.truncated).toBe(true);
     expect(result.activities.map((activity) => activity.id)).toEqual([activityA, activityB]);
     expect(runTimeline).toHaveBeenCalledWith("multica", [
-      "--workspace-id", workspace, "issue", "timeline", child, "--activity-only", "--output", "json",
+      "--workspace-id", workspace, "issue", "timeline", child, "--output", "json",
     ]);
+  });
+
+  it("reads authored handoff content and server provenance alongside activity", async () => {
+    const reader = new MulticaReader({ runTimeline: async () => ({ truncated: false, value: [{
+      id: activityA, type: "comment", actor_type: "agent", source_task_id: task,
+      content: "DONE. Fixed retry ordering; tests pass and PR is ready for review.",
+      created_at: "2026-09-08T10:00:00Z",
+    }] }) });
+    const result = await reader.issueActivities(child, workspace);
+    expect(result.activities).toEqual([]);
+    expect(result.handoffs?.[0]).toMatchObject({ id: activityA, source_task_id: task });
   });
 
   it("rejects malformed timeline entries", async () => {
