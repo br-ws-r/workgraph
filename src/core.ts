@@ -5,3 +5,5 @@ export * from "./outbox.js";
 export * from "./cognee.js";
 export * from "./multica.js";
 export * from "./runtime.js";
+
+export * from "./followups.js";

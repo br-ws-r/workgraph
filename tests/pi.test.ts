@@ -132,7 +132,7 @@ describe("Workgraph Pi extension", () => {
       "session_start", "before_agent_start", "agent_settled", "session_before_compact", "session_shutdown",
     ]);
     expect([...harness.tools.keys()]).toEqual([
-      "initiative_memory_status", "initiative_memory_recall",
+      "initiative_memory_status", "initiative_delivery_status", "initiative_delivery_followup", "initiative_handoffs_repair", "initiative_memory_recall",
       "initiative_memory_remember", "initiative_timeline",
     ]);
   });

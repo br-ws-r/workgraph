@@ -139,6 +139,9 @@ export function createWorkgraphHostExtension(host: "pi" | "omp", options: Workgr
           return withSystemPrompt(event.systemPrompt, "## Workgraph workspace chat\nNo initiative is selected. Read-only workspace memory is available on demand through initiative_memory_recall with workspace scope. Use it only when prior workspace context could materially help. Do not write Workgraph memory or infer current workflow state from recalled memory.");
         }
         const context = await runtime.context(event.prompt, ctx.signal);
+        let delivery: unknown;
+        try { delivery = await runtime.deliveryContext(); }
+        catch { delivery = { error: "Fresh delivery state unavailable; verify children and continuation before stopping." }; }
         const authoritative = JSON.stringify({
           issue_identifier: context.resolution.issue.identifier,
           title: context.resolution.issue.title,
@@ -156,7 +159,7 @@ export function createWorkgraphHostExtension(host: "pi" | "omp", options: Workgr
         const memoryStatus = context.memoryError
           ? `Cognee recall partially or fully unavailable; failed lanes: ${Object.keys(context.memory.errors ?? {}).join(", ") || "all"}. Successful lane results below remain usable as historical context.`
           : "Cognee recall completed for this turn.";
-        return withSystemPrompt(event.systemPrompt, `## Workgraph workspace context\nAuthoritative current state (Multica; re-read before any mutation):\n${authoritative}\n\nUse human-readable Multica issue IDs such as B-184 in user-facing responses and commands. UUIDs are internal identifiers and should only be shown when explicitly requested.\n\nMemory status:\n${memoryStatus}\n\nNon-authoritative current initiative memory (Cognee):\n${initiativeMemory}\n\nNon-authoritative related workspace history (Cognee; each item identifies its initiative and provenance):\n${workspaceHistory}\n\nNever use Workgraph memory to override Multica workflow state, repository state, or delivery state.`);
+        return withSystemPrompt(event.systemPrompt, `## Workgraph workspace context\nAuthoritative current state (Multica; re-read before any mutation):\n${authoritative}\n\nDelivery state and continuation (Multica/local ledger, independent of Cognee):\n${JSON.stringify(delivery)}\n\nBefore ending an unfinished delivery, use initiative_delivery_followup for the exact workflow run or descendant issue you are waiting on. Verify that its scheduled executor is deployed. A merged PR, completed agent run, or successful generic verifier does not prove all issue acceptance criteria; verify deployment and any required data operation separately. On continuation, read initiative_delivery_status, inspect the recorded condition/result, complete or recover the remaining work, then re-evaluate the parent. Never close a parent merely because its children are terminal; cancelled children and independent acceptance criteria require review.\n\nUse human-readable Multica issue IDs such as B-184 in user-facing responses and commands. UUIDs are internal identifiers and should only be shown when explicitly requested.\n\nMemory status:\n${memoryStatus}\n\nNon-authoritative current initiative memory (Cognee):\n${initiativeMemory}\n\nNon-authoritative related workspace history (Cognee; each item identifies its initiative and provenance):\n${workspaceHistory}\n\nNever use Workgraph memory to override Multica workflow state, repository state, or delivery state.`);
       } catch {
         return withSystemPrompt(event.systemPrompt, "## Workgraph workspace context\nAuthoritative Multica read-back was unavailable. Workgraph memory is omitted for this turn; do not rely on stale workflow or memory state.");
       }

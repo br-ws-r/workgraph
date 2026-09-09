@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { WorkgraphOutbox, WorkgraphRuntime, CogneeApiClient, SCHEMA_VERSION, EXTRACTION_PROMPT_VERSION } from "@br-ws-r/workgraph/core";
+import { FollowupStore, WorkgraphOutbox, WorkgraphRuntime, CogneeApiClient, SCHEMA_VERSION, EXTRACTION_PROMPT_VERSION } from "@br-ws-r/workgraph/core";
 import pi from "@br-ws-r/workgraph/pi";
 import omp from "@br-ws-r/workgraph/omp";
 import legacy from "@br-ws-r/workgraph";
@@ -62,6 +62,19 @@ try {
   assert.match(requests[0].body, /workgraph-workspace-smoke/);
   assert.equal((await cognee.recall("smoke", "workgraph-workspace-smoke"))[0].text, JSON.stringify(record));
 
+  const followups = new FollowupStore(join(dataDir, "followups.db"));
+  try {
+    const watch = followups.add({ workspaceId: workspace, initiativeId: issue, ownerId: issue,
+      ownerIdentifier: "WG-1", assignment: "agent:smoke", reason: "Verify workflow evidence",
+      condition: { kind: "github_workflow", url: "https://github.com/example/project/actions/runs/1" } });
+    assert.equal(followups.add(watch).id, watch.id);
+    assert.equal(followups.claim(watch), true);
+    assert.equal(followups.claim(watch), false);
+    assert.equal(followups.transition(watch.id, "dispatching", "dispatched"), true);
+    followups.heartbeat(workspace);
+    assert.equal(followups.executorStatus(workspace).recentlyObserved, true);
+  } finally { followups.close(); }
+
   // Exercise the installed entrypoints, not source imports or a mock runtime.
   process.env.WORKGRAPH_DATA_DIR = dataDir;
   for (const extension of [pi, omp, legacy]) {
@@ -74,7 +87,7 @@ try {
     });
     const ctx = { hasUI: false, ui: { setStatus() {}, notify() {} }, sessionManager: { buildContextEntries: () => [] } };
     await handlers.get("session_start")({}, ctx);
-    assert.equal(tools.size, 4);
+    assert.equal(tools.size, 7);
     assert.equal((await tools.get("initiative_memory_status").execute()).details.value.mode, "no-initiative");
     await handlers.get("session_shutdown")({}, ctx);
   }

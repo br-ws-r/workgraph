@@ -117,11 +117,12 @@ describe("Workgraph OMP extension", () => {
       "session_start", "before_agent_start", "session_stop", "session_before_compact", "session_shutdown",
     ]);
     expect([...loaded.tools.keys()]).toEqual([
-      "initiative_memory_status", "initiative_memory_recall",
+      "initiative_memory_status", "initiative_delivery_status", "initiative_delivery_followup", "initiative_handoffs_repair", "initiative_memory_recall",
       "initiative_memory_remember", "initiative_timeline",
     ]);
     expect([...loaded.tools.values()].every((tool) => tool.loadMode === "essential")).toBe(true);
-    expect(loaded.tools.get("initiative_memory_remember")?.approval).toBe("write");
+    expect(["initiative_memory_remember", "initiative_delivery_status", "initiative_delivery_followup", "initiative_handoffs_repair"]
+      .every((name) => loaded.tools.get(name)?.approval === "write")).toBe(true);
     expect(["initiative_memory_status", "initiative_memory_recall", "initiative_timeline"]
       .every((name) => loaded.tools.get(name)?.approval === "read")).toBe(true);
   });

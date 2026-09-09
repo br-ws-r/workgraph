@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Fix handoff capture for actual dash/colon/Markdown and merged/decision formats;
+  expose rejection counts and add bounded, idempotent repair of skipped comments.
+- Record explicit issue/parent graph edges and inject live direct-child states
+  and local delivery context independently of Cognee recall.
+- Persist parent/child and exact-workflow continuations with an opt-in scheduled
+  executor, ownership revalidation, per-owner dispatch reservation and visible
+  ambiguous outcomes. Agent acceptance remains required before issue completion.
+
 - Capture bounded, sourced agent handoff narratives as observed memory; retain
   generic status/task activity only in the exact SQLite timeline. Baseline old
   comments without replaying them, preserving all existing data.

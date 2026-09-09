@@ -9,7 +9,8 @@ import {
   type InitiativeResolution,
   type MulticaWorkspace,
 } from "./multica.js";
-import { summarizeActivity, summarizeHandoff } from "./activity.js";
+import { FollowupStore, assignment, type FollowupCondition } from "./followups.js";
+import { summarizeActivity, inspectHandoff } from "./activity.js";
 import { recallValidMemories } from "./recall.js";
 import { WorkgraphOutbox, type TimelineEntry, type TimelineFilter } from "./outbox.js";
 import {
@@ -273,6 +274,91 @@ export class WorkgraphRuntime {
     }
   }
 
+  /** Fresh workflow facts and durable continuations remain usable when semantic recall fails. */
+  async deliveryContext() {
+    const resolution = await this.requireFreshResolution();
+    const children = await this.multica.children(resolution.issue.id, resolution.workspace.id);
+    const summary = `Issue ${resolution.issue.identifier}: ${resolution.issue.status_category ?? resolution.issue.status}.`
+      + ` Parent: ${resolution.parent?.identifier ?? "none"}.`
+      + ` Direct children: ${children.map((child) => `${child.identifier}=${child.status_category ?? child.status}`).join(", ") || "none"}.`;
+    const fingerprint = createHash("sha256").update(JSON.stringify({
+      summary, revision: resolution.issue.revision, parent: resolution.parent?.id, children: children.map((child) => child.id).sort(),
+    })).digest("hex");
+    if (!this.timeline(1, { eventId: `issue-state:${this.#scope!.issueId}:${fingerprint}` }).length) {
+      this.rememberVerified({ entityType: "Issue", authority: "observed",
+        entityIdentifier: `issue:${resolution.issue.identifier}`, entityLabel: `${resolution.issue.identifier} workflow state`,
+        summary, source: this.issueSource(), sourceRevision: String(resolution.issue.revision ?? fingerprint),
+        eventId: `issue-state:${this.#scope!.issueId}:${fingerprint}`,
+        relations: [
+          { type: "part_of", target: `initiative:${resolution.root.identifier}` },
+          ...(resolution.parent ? [{ type: "child_of" as const, target: `issue:${resolution.parent.identifier}` }] : []),
+        ],
+      }, resolution);
+    }
+    const store = new FollowupStore(`${this.outbox.path}.followups.db`);
+    let parentWatchError: string | undefined;
+    try {
+      if (resolution.parent) {
+        try {
+          store.add({ workspaceId: resolution.workspace.id, initiativeId: resolution.root.id,
+            ownerId: resolution.parent.id, ownerIdentifier: resolution.parent.identifier,
+            assignment: assignment(resolution.parent),
+            reason: `Re-evaluate ${resolution.parent.identifier} acceptance after ${resolution.issue.identifier} finishes.`,
+            condition: { kind: "issue_terminal", issueId: resolution.issue.id } });
+        } catch { parentWatchError = "Parent follow-up could not be registered; check its assignment."; }
+      }
+      return { current: { identifier: resolution.issue.identifier, status: resolution.issue.status,
+          parent: resolution.parent?.identifier },
+        children: children.map((child) => ({ identifier: child.identifier, status: child.status,
+          status_category: child.status_category })),
+        followups: store.list(resolution.workspace.id, resolution.issue.id), parentWatchError,
+        handoffCapture: this.outbox.handoffCapture(resolution.workspace.id, resolution.issue.id),
+        executor: store.executorStatus(resolution.workspace.id),
+        recentHandoffs: this.timeline(50).filter((event) => event.eventType === "handoff_observed")
+          .slice(-5).map((event) => ({ summary: event.boundedSummary, source: event.source, timestamp: event.timestamp })),
+      };
+    } finally { store.close(); }
+  }
+
+  async trackFollowup(condition: FollowupCondition, reason: string) {
+    const resolution = await this.requireFreshResolution();
+    if (condition.kind === "issue_terminal") {
+      const target = await this.multica.resolveIssue(condition.issueId, resolution.workspace.id);
+      if (target.root.id !== resolution.root.id || target.issue.id === resolution.issue.id
+        || !target.chain.includes(resolution.issue.id)) throw new Error("Follow-up must target a descendant of the current issue");
+    }
+    const store = new FollowupStore(`${this.outbox.path}.followups.db`);
+    try { return store.add({ workspaceId: resolution.workspace.id, initiativeId: resolution.root.id,
+      ownerId: resolution.issue.id, ownerIdentifier: resolution.issue.identifier, assignment: assignment(resolution.issue),
+      condition, reason: boundText(reason, 1000) });
+    } finally { store.close(); }
+  }
+
+  /** Explicit bounded repair reconsiders comments skipped by an older parser, without resetting cursors. */
+  async repairHandoffs(since: string): Promise<number> {
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(since) || !Number.isFinite(Date.parse(since))) throw new Error("A valid since timestamp is required");
+    const resolution = await this.requireFreshResolution();
+    const result = await this.multica.issueActivities(resolution.issue.id, resolution.workspace.id);
+    if (result.truncated) throw new Error("Cannot repair truncated history; use a complete source export");
+    let captured = 0;
+    for (const comment of result.handoffs ?? []) {
+      if (Date.parse(comment.created_at) < Date.parse(since)) continue;
+      const { summary, reason } = inspectHandoff(comment);
+      this.outbox.auditHandoff(this.#scope!.workspaceId, this.#scope!.issueId, comment.id, reason);
+      if (!summary || this.timeline(1, { eventId: `multica-handoff:${comment.id}` }).length) continue;
+      this.rememberVerified({ entityType: "Handoff", authority: "observed", summary,
+        entityIdentifier: `handoff:${this.#scope!.issueIdentifier.toLowerCase()}:${createHash("sha256").update(comment.id).digest("hex").slice(0,16)}`,
+        entityLabel: `${this.#scope!.issueIdentifier} agent handoff`,
+        source: `${this.issueSource()}/comments/${comment.id}`, sourceRevision: comment.id,
+        relations: [{ type: "about", target: `issue:${this.#scope!.issueIdentifier}` }],
+        eventType: "handoff_observed", eventId: `multica-handoff:${comment.id}`, observedAt: comment.created_at,
+      }, resolution, false);
+      captured++;
+    }
+    this.scheduleFlush();
+    return captured;
+  }
+
   async workspaceContext(query: string, topK = 8, signal?: AbortSignal): Promise<WorkgraphWorkspaceContext> {
     const workspaceId = this.env.MULTICA_WORKSPACE_ID?.trim();
     if (!workspaceId) throw new Error("MULTICA_WORKSPACE_ID is required for workspace recall");
@@ -351,11 +437,14 @@ export class WorkgraphRuntime {
     const operation = this.#reconciliations.then(() => this.reconcileActivityNow());
     this.#reconciliations = operation.catch(() => undefined);
     const { resolution } = await operation;
+    let deliveryWarning = "";
+    try { await this.deliveryContext(); }
+    catch { deliveryWarning = " Delivery state refresh unavailable; verify continuation before claiming completion."; }
     this.scheduleFlush();
     const observedAt = new Date().toISOString();
     return this.append(
       "run_settled",
-      `Work on Multica issue ${resolution.issue.identifier} settled with authoritative status ${resolution.issue.status}.`,
+      `Work on Multica issue ${resolution.issue.identifier} settled with authoritative status ${resolution.issue.status}.${deliveryWarning}`,
       this.issueSource(),
       "observed",
       undefined,
@@ -572,7 +661,8 @@ export class WorkgraphRuntime {
     }
     for (const comment of result.handoffs ?? []) {
       if (this.outbox.hasSeenActivity(this.#scope.workspaceId, this.#scope.issueId, comment.id)) continue;
-      const summary = summarizeHandoff(comment);
+      const { summary, reason } = inspectHandoff(comment);
+      this.outbox.auditHandoff(this.#scope!.workspaceId, this.#scope!.issueId, comment.id, reason);
       if (summary) {
         this.rememberVerified({
           entityType: "Handoff", authority: "observed", summary,
