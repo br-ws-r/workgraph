@@ -63,28 +63,9 @@ export function registerTools(
   pi.registerTool({
     ...writeHostOptions,
     name: "initiative_delivery_status", label: "Initiative Delivery Status",
-    description: "Read fresh children, issue status, and durable follow-ups. Refreshes sourced issue graph state; does not complete issues.",
+    description: "Read fresh issue, children and active runs from upstream Multica; expose missing execution evidence. Refreshes sourced graph state without dispatching work or completing issues.",
     parameters: Type.Object({}),
     async execute() { return result(await runtime.deliveryContext()); },
-  });
-  pi.registerTool({
-    ...writeHostOptions,
-    name: "initiative_delivery_followup", label: "Track Delivery Follow-up",
-    description: "Persist a continuation for this issue's current owner when a descendant finishes or an exact GitHub workflow completes (including failure). Requires a scheduled workgraph followups --dispatch executor. Does not mark acceptance complete.",
-    parameters: Type.Object({
-      reason: Type.String({ minLength: 1, maxLength: 1000 }),
-      child_issue: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
-      workflow_url: Type.Optional(Type.String({ minLength: 1, maxLength: 1000 })),
-    }),
-    async execute(_id, params) {
-      if (Boolean(params.child_issue) === Boolean(params.workflow_url)) throw new Error("Specify exactly one child_issue or workflow_url");
-      const resolution = await runtime.requireFreshResolution();
-      const condition = params.child_issue
-        ? { kind: "issue_terminal" as const, issueId: (await runtime.multica.issue(params.child_issue, resolution.workspace.id)).id }
-        : { kind: "github_workflow" as const, url: params.workflow_url! };
-      return result({ followup: await runtime.trackFollowup(condition, params.reason),
-        executor_required: "Scheduled workgraph followups --dispatch using the same WORKGRAPH_DATA_DIR and workspace" });
-    },
   });
   pi.registerTool({
     ...writeHostOptions,

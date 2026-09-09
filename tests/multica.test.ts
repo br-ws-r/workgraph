@@ -274,3 +274,21 @@ it("validates staged children and refuses incomplete, duplicate or foreign famil
     await expect(invalid.children(root, workspace)).rejects.toThrow();
   }
 });
+
+describe("upstream active-run evidence", () => {
+  const active = { id: task, agent_id: agent, workspace_id: workspace, issue_id: child, status: "running" };
+  it("reads the existing scoped upstream command", async () => {
+    const run = vi.fn(async (_command: string, _args: string[]) => [active]);
+    expect(await new MulticaReader({ run }).activeRuns(child, workspace)).toEqual([active]);
+    expect(run).toHaveBeenCalledWith("multica", ["--workspace-id", workspace, "issue", "runs", child, "--active", "--output", "json"]);
+  });
+  it.each([
+    [{ ...active, workspace_id: root }], [{ ...active, issue_id: root }],
+    [{ ...active, status: "completed" }], [active, active], [{}], { runs: [] },
+  ].map((value) => ({ value })))("rejects invalid or misleading active evidence: $value", async ({ value }) => {
+    await expect(new MulticaReader({ run: async () => value }).activeRuns(child, workspace)).rejects.toThrow();
+  });
+  it("accepts a confirmed empty response", async () => {
+    expect(await new MulticaReader({ run: async () => [] }).activeRuns(child, workspace)).toEqual([]);
+  });
+});

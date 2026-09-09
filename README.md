@@ -23,14 +23,14 @@ not require a memory migration.
 - Captures bounded agent handoff narratives in Cognee; keeps generic Multica activity in the local timeline.
 - Queues semantic writes durably when Cognee is unavailable.
 - Records explicit issue/parent graph edges and fresh child status context.
-- Persists delivery waits and supports an opt-in scheduled continuation executor.
+- Exposes open issues without active runs and distinguishes unavailable execution evidence.
 
 See [delivery continuation and incident repair](docs/delivery-continuations.md)
-for executor installation, ownership checks, recovery and rollout acceptance.
+for upstream Multica observations, recovery and acceptance checks.
 
 Multica remains authoritative for assignments and workflow state. Cognee recall
 is historical context that an agent must verify. Workgraph does not synchronize
-GitHub issue status (the optional executor observes exact workflow runs), capture arbitrary tool output, archive conversations, or manage Cognee's
+GitHub issue status, dispatch agents, capture arbitrary tool output, archive conversations, or manage Cognee's
 inference providers. Its ontology describes work, not a particular company,
 repository, server, or development process.
 
@@ -249,6 +249,8 @@ For a reproducible six-agent evaluation, use the
 
 | Tool | Purpose |
 | --- | --- |
+| `initiative_delivery_status` | Fresh issue/child states, active-run evidence and acceptance warnings |
+| `initiative_handoffs_repair` | Bounded, idempotent repair of skipped authored handoffs |
 | `initiative_memory_status` | Scope, configured backend and exact pending semantic delivery count |
 | `initiative_memory_recall` | Current initiative, related workspace history, or read-only chat recall |
 | `initiative_memory_remember` | Queue a bounded, sourced semantic record |

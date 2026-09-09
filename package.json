@@ -67,7 +67,8 @@
     "check": "npm run typecheck && npm test && npm run test:package",
     "prepare": "npm run build",
     "prepublishOnly": "npm run check",
-    "test:package": "npm run build && node scripts/package-smoke.mjs"
+    "test:package": "npm run build && node scripts/package-smoke.mjs",
+    "prebuild": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\""
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.84.4"

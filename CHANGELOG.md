@@ -8,9 +8,11 @@
   expose rejection counts and add bounded, idempotent repair of skipped comments.
 - Record explicit issue/parent graph edges and inject live direct-child states
   and local delivery context independently of Cognee recall.
-- Persist parent/child and exact-workflow continuations with an opt-in scheduled
-  executor, ownership revalidation, per-owner dispatch reservation and visible
-  ambiguous outcomes. Agent acceptance remains required before issue completion.
+- Read validated active runs through the existing upstream Multica CLI. Expose
+  missing execution evidence and terminal-child acceptance warnings without
+  dispatching agents, introducing a scheduler or requiring a Multica fork.
+- Clean generated output before builds so removed modules cannot leak into the
+  public npm tarball; preserve the 0.2.0 registry release configuration.
 
 - Capture bounded, sourced agent handoff narratives as observed memory; retain
   generic status/task activity only in the exact SQLite timeline. Baseline old

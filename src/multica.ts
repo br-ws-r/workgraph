@@ -255,22 +255,22 @@ export class MulticaReader {
     return children;
   }
 
-  async activeRuns(issueId: string, workspaceId: string): Promise<unknown[]> {
+  /** Advisory in-flight work on this exact issue, never a dispatch receipt. */
+  async activeRuns(issueId: string, workspaceId: string) {
     const workspace = requiredUuid(workspaceId, "Multica workspace");
     const issue = requiredUuid(issueId, "Multica issue");
     const result = await this.#run(this.#binary, [
       ...workspacePrefix(workspace), "issue", "runs", issue, "--active", "--output", "json",
     ]);
-    if (!Array.isArray(result)) throw new Error("Multica active runs response is not a list");
-    return result;
-  }
-
-  /** Only the opt-in follow-up executor calls this mutation. */
-  async rerun(issueId: string, workspaceId: string): Promise<void> {
-    await this.#run(this.#binary, [
-      ...workspacePrefix(requiredUuid(workspaceId, "Multica workspace")), "issue", "rerun",
-      requiredUuid(issueId, "Multica issue"), "--output", "json",
-    ]);
+    const runs = z.array(z.object({
+      id: UuidSchema, issue_id: UuidSchema, workspace_id: UuidSchema, agent_id: UuidSchema,
+      status: z.enum(["queued", "dispatched", "running", "waiting_local_directory"]),
+    })).parse(result);
+    if (new Set(runs.map((run) => run.id.toLowerCase())).size !== runs.length
+      || runs.some((run) => run.workspace_id.toLowerCase() !== workspace || run.issue_id.toLowerCase() !== issue)) {
+      throw new Error("Multica returned duplicate or foreign active runs");
+    }
+    return runs;
   }
 
   async issueActivities(issueId: string, workspaceId?: string): Promise<MulticaActivityResult> {

@@ -9,7 +9,6 @@ import {
   type InitiativeResolution,
   type MulticaWorkspace,
 } from "./multica.js";
-import { FollowupStore, assignment, type FollowupCondition } from "./followups.js";
 import { summarizeActivity, inspectHandoff } from "./activity.js";
 import { recallValidMemories } from "./recall.js";
 import { WorkgraphOutbox, type TimelineEntry, type TimelineFilter } from "./outbox.js";
@@ -274,7 +273,7 @@ export class WorkgraphRuntime {
     }
   }
 
-  /** Fresh workflow facts and durable continuations remain usable when semantic recall fails. */
+  /** Fresh upstream workflow observations remain usable when semantic recall fails. */
   async deliveryContext() {
     const resolution = await this.requireFreshResolution();
     const children = await this.multica.children(resolution.issue.id, resolution.workspace.id);
@@ -295,43 +294,36 @@ export class WorkgraphRuntime {
         ],
       }, resolution);
     }
-    const store = new FollowupStore(`${this.outbox.path}.followups.db`);
-    let parentWatchError: string | undefined;
-    try {
-      if (resolution.parent) {
-        try {
-          store.add({ workspaceId: resolution.workspace.id, initiativeId: resolution.root.id,
-            ownerId: resolution.parent.id, ownerIdentifier: resolution.parent.identifier,
-            assignment: assignment(resolution.parent),
-            reason: `Re-evaluate ${resolution.parent.identifier} acceptance after ${resolution.issue.identifier} finishes.`,
-            condition: { kind: "issue_terminal", issueId: resolution.issue.id } });
-        } catch { parentWatchError = "Parent follow-up could not be registered; check its assignment."; }
-      }
-      return { current: { identifier: resolution.issue.identifier, status: resolution.issue.status,
-          parent: resolution.parent?.identifier },
-        children: children.map((child) => ({ identifier: child.identifier, status: child.status,
-          status_category: child.status_category })),
-        followups: store.list(resolution.workspace.id, resolution.issue.id), parentWatchError,
-        handoffCapture: this.outbox.handoffCapture(resolution.workspace.id, resolution.issue.id),
-        executor: store.executorStatus(resolution.workspace.id),
-        recentHandoffs: this.timeline(50).filter((event) => event.eventType === "handoff_observed")
-          .slice(-5).map((event) => ({ summary: event.boundedSummary, source: event.source, timestamp: event.timestamp })),
-      };
-    } finally { store.close(); }
-  }
-
-  async trackFollowup(condition: FollowupCondition, reason: string) {
-    const resolution = await this.requireFreshResolution();
-    if (condition.kind === "issue_terminal") {
-      const target = await this.multica.resolveIssue(condition.issueId, resolution.workspace.id);
-      if (target.root.id !== resolution.root.id || target.issue.id === resolution.issue.id
-        || !target.chain.includes(resolution.issue.id)) throw new Error("Follow-up must target a descendant of the current issue");
+    let activeRuns: Awaited<ReturnType<MulticaReader["activeRuns"]>> | undefined;
+    try { activeRuns = await this.multica.activeRuns(resolution.issue.id, resolution.workspace.id); }
+    catch { /* Unknown is not an empty queue. Keep the available issue/child facts. */ }
+    const currentTask = this.scope?.taskId ?? this.env.MULTICA_TASK_ID;
+    const otherRuns = activeRuns?.filter((run) => run.id !== currentTask);
+    const category = (issue: typeof resolution.issue) => (issue.status_category ?? issue.status).toLowerCase();
+    const terminal = (issue: typeof resolution.issue) => ["done", "cancelled", "canceled"].includes(category(issue));
+    const warnings: string[] = [];
+    if (activeRuns === undefined) warnings.push("active_runs_unavailable");
+    if (["todo", "in_progress", "in_review"].includes(category(resolution.issue))) {
+      if (activeRuns?.length === 0) warnings.push("open_issue_without_active_run");
+      else if (otherRuns?.length === 0) warnings.push("current_run_has_no_observed_successor");
     }
-    const store = new FollowupStore(`${this.outbox.path}.followups.db`);
-    try { return store.add({ workspaceId: resolution.workspace.id, initiativeId: resolution.root.id,
-      ownerId: resolution.issue.id, ownerIdentifier: resolution.issue.identifier, assignment: assignment(resolution.issue),
-      condition, reason: boundText(reason, 1000) });
-    } finally { store.close(); }
+    if (!terminal(resolution.issue) && children.length > 0 && children.every(terminal)) {
+      warnings.push("all_children_terminal_acceptance_requires_review");
+    }
+    return {
+      authority: "multica", observedAt: new Date().toISOString(),
+      current: { identifier: resolution.issue.identifier, status: resolution.issue.status,
+        status_category: resolution.issue.status_category, parent: resolution.parent?.identifier },
+      children: children.map((child) => ({ identifier: child.identifier, status: child.status,
+        status_category: child.status_category })),
+      execution: { availability: activeRuns === undefined ? "unavailable" : "available",
+        activeRunCount: activeRuns?.length, otherActiveRunCount: otherRuns?.length,
+        currentRunObserved: activeRuns?.some((run) => run.id === currentTask) },
+      warnings,
+      handoffCapture: this.outbox.handoffCapture(resolution.workspace.id, resolution.issue.id),
+      recentHandoffs: this.timeline(50).filter((event) => event.eventType === "handoff_observed")
+        .slice(-5).map((event) => ({ summary: event.boundedSummary, source: event.source, timestamp: event.timestamp })),
+    };
   }
 
   /** Explicit bounded repair reconsiders comments skipped by an older parser, without resetting cursors. */

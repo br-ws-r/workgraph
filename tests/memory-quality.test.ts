@@ -18,13 +18,13 @@ const issue = { id: issueId, workspace_id: workspace, identifier: "B-225", statu
 const resolution = { workspace: { id: workspace, name: "BRWSR", slug: "brwsr" }, root: issue, issue, chain: [issueId] };
 const handoff: MulticaHandoff = { id: task, type: "comment", actor_type: "agent", source_task_id: task,
   created_at: "2026-09-08T10:00:00Z", content: "IN PROGRESS. Retry starvation caused missing images. Fixed ordering; 180 tests pass. PR #24 is ready for review.\n\n```\nraw log must not be copied\n```" };
-function fixture(recall = vi.fn(async () => [] as unknown[])) {
+function fixture(recall = vi.fn(async () => [] as unknown[]), currentTask?: string) {
   const multica = new MulticaReader({ run: vi.fn() });
   multica.resolveIssue = vi.fn(async () => resolution);
   multica.issueActivities = vi.fn(async () => ({ activities: [], handoffs: [] as MulticaHandoff[], truncated: false }));
   const outbox = new WorkgraphOutbox(join(mkdtempSync(join(tmpdir(), "memory-quality-")), "outbox.db"));
   const remember = vi.fn(async () => ({ status: "completed" }));
-  const runtime = new WorkgraphRuntime({ env: { MULTICA_WORKSPACE_ID: workspace }, multica, outbox,
+  const runtime = new WorkgraphRuntime({ env: { MULTICA_WORKSPACE_ID: workspace, MULTICA_TASK_ID: currentTask }, multica, outbox,
     cognee: { recall, remember } as unknown as CogneeApiClient });
   runtime.lockInitiative(resolution);
   vi.spyOn(runtime, "scheduleFlush").mockImplementation(() => undefined);
@@ -152,7 +152,7 @@ describe("B-226 handoff regression", () => {
   });
 });
 
-it("B-226 emits child_of B-150 and durably registers the parent continuation", async () => {
+it("B-226 emits child_of B-150 without registering a parent continuation", async () => {
   const parent = { ...issue, identifier: "B-150", assignee_type: "agent", assignee_id: task };
   const child = { ...issue, id: task, identifier: "B-226", parent_issue_id: issueId };
   const scope = { ...resolution, issue: child, root: parent, parent, chain: [task, issueId] };
@@ -166,10 +166,44 @@ it("B-226 emits child_of B-150 and durably registers the parent continuation", a
   const snapshot = outbox.pending(workspace).find((event) => event.memoryRecord?.entity_type === "Issue");
   expect(snapshot?.memoryRecord).toMatchObject({ entity_identifier: "issue:B-226", initiative_identifier: "B-150",
     relations: [{ type: "part_of", target: "initiative:B-150" }, { type: "child_of", target: "issue:B-150" }] });
-  const { FollowupStore } = await import("../src/followups.js");
-  const store = new FollowupStore(`${outbox.path}.followups.db`);
-  expect(store.list(workspace)[0]).toMatchObject({ ownerIdentifier: "B-150", status: "waiting",
-    condition: { kind: "issue_terminal", issueId: task } });
-  expect(store.executorStatus(workspace).recentlyObserved).toBe(false);
-  store.close(); await runtime.shutdown();
+  await runtime.shutdown();
+});
+
+describe("delivery observations without a scheduler", () => {
+  it("distinguishes an idle open issue from unavailable execution evidence", async () => {
+    const f = fixture();
+    f.multica.children = vi.fn(async () => []);
+    f.multica.activeRuns = vi.fn(async () => []);
+    expect(await f.runtime.deliveryContext()).toMatchObject({
+      execution: { availability: "available", activeRunCount: 0 },
+      warnings: ["open_issue_without_active_run"],
+    });
+    f.multica.activeRuns = vi.fn(async () => { throw new Error("offline"); });
+    const unknown = await f.runtime.deliveryContext();
+    expect(unknown.execution).toMatchObject({ availability: "unavailable" });
+    expect(unknown.execution.activeRunCount).toBeUndefined();
+    expect(unknown.warnings).toEqual(["active_runs_unavailable"]);
+    f.outbox.close();
+  });
+  it("does not count the current run as evidence of another agent continuing", async () => {
+    const f = fixture(undefined, task);
+    f.multica.children = vi.fn(async () => []);
+    const current = { id: task, issue_id: issueId, workspace_id: workspace, agent_id: task, status: "running" as const };
+    f.multica.activeRuns = vi.fn(async () => [current]);
+    expect(await f.runtime.deliveryContext()).toMatchObject({
+      execution: { activeRunCount: 1, otherActiveRunCount: 0, currentRunObserved: true },
+      warnings: ["current_run_has_no_observed_successor"],
+    });
+    f.multica.activeRuns = vi.fn(async () => [current, { ...current, id: issueId }]);
+    expect((await f.runtime.deliveryContext()).warnings).toEqual([]);
+    f.outbox.close();
+  });
+  it("keeps parent acceptance pending even when the last child was cancelled", async () => {
+    const f = fixture();
+    f.multica.children = vi.fn(async () => [{ ...issue, id: task, identifier: "B-226", parent_issue_id: issueId, status: "cancelled" }]);
+    f.multica.activeRuns = vi.fn(async () => []);
+    expect((await f.runtime.deliveryContext()).warnings).toContain("all_children_terminal_acceptance_requires_review");
+    expect(f.multica.children).toHaveBeenCalledWith(issueId, workspace);
+    f.outbox.close();
+  });
 });
