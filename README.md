@@ -10,9 +10,9 @@ Workgraph runs inside the agent harness; it is not another server to operate.
 schema, workspace datasets, and durable SQLite outbox. Switching harnesses does
 not require a memory migration.
 
-> Experimental, pre-1.0. The package is installable from GitHub or a built npm
-> tarball and is not published to a registry. `private: true` prevents accidental
-> npm publication; it does not make this GitHub repository private.
+> Experimental, pre-1.0. Published as a public scoped package
+> [`@br-ws-r/workgraph`](https://www.npmjs.com/package/@br-ws-r/workgraph) on
+> npmjs; GitHub source and built-tarball installs remain supported.
 
 ## What it does
 
@@ -82,19 +82,34 @@ against the intended server **as the OS user that launches the agents**.
 
 ## Install on a server
 
-Choose an approved commit from this repository. The server needs Git access to
-the source; if the repository is private, configure a read-only deploy key or a
-credential helper first. Do not embed tokens in package URLs.
+Install the published package from npmjs. The package is public: consumers need
+no token and no `.npmrc` entry.
 
 ```bash
 # An application directory owned by the agent service user.
 mkdir -p "$HOME/workgraph-install"
 cd "$HOME/workgraph-install"
 npm init -y
+# Replace the placeholder with the approved version.
+npm install --save-exact '@br-ws-r/workgraph@<version>'
+
+# Register the installed package with the harness used on this server.
+omp plugin link "$PWD/node_modules/@br-ws-r/workgraph"
+# Pi remains supported; use this instead for a Pi installation:
+# pi install "$PWD/node_modules/@br-ws-r/workgraph"
+```
+
+Alternatively, choose an approved commit from this repository. The server needs
+Git access to the source; if the repository is private, configure a read-only
+deploy key or a credential helper first. Do not embed tokens in package URLs.
+
+```bash
+mkdir -p "$HOME/workgraph-install"
+cd "$HOME/workgraph-install"
+npm init -y
 # Replace the placeholder with the approved full Git commit SHA.
 npm install --save-exact 'git+https://github.com/br-ws-r/workgraph.git#<commit-sha>'
 
-# Register the installed package with the harness used on this server.
 omp plugin link "$PWD/node_modules/@br-ws-r/workgraph"
 # Pi remains supported; use this instead for a Pi installation:
 # pi install "$PWD/node_modules/@br-ws-r/workgraph"
