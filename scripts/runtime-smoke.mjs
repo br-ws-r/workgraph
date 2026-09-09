@@ -74,7 +74,7 @@ try {
     });
     const ctx = { hasUI: false, ui: { setStatus() {}, notify() {} }, sessionManager: { buildContextEntries: () => [] } };
     await handlers.get("session_start")({}, ctx);
-    assert.equal(tools.size, 6);
+    assert.equal(tools.size, 4);
     assert.equal((await tools.get("initiative_memory_status").execute()).details.value.mode, "no-initiative");
     await handlers.get("session_shutdown")({}, ctx);
   }

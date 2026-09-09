@@ -236,53 +236,6 @@ export class MulticaReader {
     }).sort((a, b) => String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? ""))).slice(0, limit);
   }
 
-  /** Exact direct children only; incomplete or foreign responses cannot imply completion. */
-  async children(issueId: string, workspaceId: string): Promise<MulticaIssue[]> {
-    const workspace = requiredUuid(workspaceId, "Multica workspace");
-    const parent = requiredUuid(issueId, "Multica issue");
-    const value = await this.#run(this.#binary, [
-      ...workspacePrefix(workspace), "issue", "children", parent, "--output", "json",
-    ]);
-    const result = z.object({ total: z.number().int().nonnegative(),
-      unstaged: z.array(MulticaIssueSchema),
-      stages: z.array(z.object({ issues: z.array(MulticaIssueSchema) })),
-    }).parse(value);
-    const children = [...result.unstaged, ...result.stages.flatMap((stage) => stage.issues)];
-    if (children.length !== result.total || new Set(children.map((child) => child.id.toLowerCase())).size !== children.length
-      || children.some((child) => child.workspace_id.toLowerCase() !== workspace || child.parent_issue_id?.toLowerCase() !== parent)) {
-      throw new Error("Multica returned incomplete or foreign children");
-    }
-    return children;
-  }
-
-  async continuations(issueId: string, workspaceId: string) {
-    const workspace = requiredUuid(workspaceId, "Multica workspace");
-    const issue = requiredUuid(issueId, "Multica issue");
-    const value = await this.#run(this.#binary, [...workspacePrefix(workspace),
-      "issue", "continuation", "list", issue, "--output", "json"]);
-    const result = z.object({ ontology_version: z.literal("multica-delivery/v1"),
-      continuations: z.array(z.object({ source_task_id: UuidSchema, workspace_id: UuidSchema,
-        issue_id: UuidSchema, agent_id: UuidSchema, event_key: z.string(), next_action: z.string(),
-        state: z.enum(["waiting", "dispatched", "blocked"]), successor_task_id: UuidSchema.nullable(),
-        updated_at: z.string().datetime({ offset: true }),
-      })),
-    }).parse(value);
-    if (result.continuations.some((c) => c.workspace_id !== workspace || c.issue_id !== issue)) {
-      throw new Error("Multica returned foreign continuation evidence");
-    }
-    return result.continuations;
-  }
-
-  async activeRuns(issueId: string, workspaceId: string): Promise<unknown[]> {
-    const workspace = requiredUuid(workspaceId, "Multica workspace");
-    const issue = requiredUuid(issueId, "Multica issue");
-    const result = await this.#run(this.#binary, [
-      ...workspacePrefix(workspace), "issue", "runs", issue, "--active", "--output", "json",
-    ]);
-    if (!Array.isArray(result)) throw new Error("Multica active runs response is not a list");
-    return result;
-  }
-
   async issueActivities(issueId: string, workspaceId?: string): Promise<MulticaActivityResult> {
     const expectedWorkspace = requiredUuid(workspaceId, "Multica workspace");
     const expectedIssue = requiredUuid(issueId, "Multica issue");

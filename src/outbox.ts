@@ -68,11 +68,6 @@ export class WorkgraphOutbox {
         timestamp TEXT NOT NULL, workspace_id TEXT NOT NULL, issue_id TEXT,
         task_id TEXT, run_id TEXT, phase TEXT NOT NULL, details_json TEXT NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS workgraph_handoff_capture (
-        workspace_id TEXT NOT NULL, issue_id TEXT NOT NULL, comment_id TEXT NOT NULL,
-        reason TEXT NOT NULL, parser_version INTEGER NOT NULL,
-        PRIMARY KEY (workspace_id, issue_id, comment_id)
-      );
       CREATE TABLE IF NOT EXISTS multica_handoff_state (
         workspace_id TEXT NOT NULL, issue_id TEXT NOT NULL,
         PRIMARY KEY (workspace_id, issue_id)
@@ -313,17 +308,6 @@ export class WorkgraphOutbox {
           WHERE event_id = ? AND delivered_at IS NULL AND claimed_by = ? AND claim_expires_at > ?
         `).run(...parameters, owner, Date.now());
     return Number(result.changes) === 1;
-  }
-
-  auditHandoff(workspace: string, issue: string, comment: string, reason: string): void {
-    this.#db.prepare(`INSERT INTO workgraph_handoff_capture VALUES (?,?,?,?,2)
-      ON CONFLICT(workspace_id, issue_id, comment_id) DO UPDATE SET reason=excluded.reason, parser_version=2`)
-      .run(workspace, issue, comment, reason);
-  }
-
-  handoffCapture(workspace: string, issue: string) {
-    return this.#db.prepare(`SELECT reason, count(*) AS count FROM workgraph_handoff_capture
-      WHERE workspace_id=? AND issue_id=? GROUP BY reason`).all(workspace, issue);
   }
 
   close(): void { this.#db.close(); }
