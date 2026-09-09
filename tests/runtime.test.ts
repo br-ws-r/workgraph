@@ -624,7 +624,7 @@ describe("Workgraph workspace runtime", () => {
 
     expect(settled).toMatchObject({
       eventType: "run_settled",
-      boundedSummary: "Work on Multica issue B-185 settled with authoritative status in_progress.",
+      boundedSummary: "Work on Multica issue B-185 settled with authoritative status in_progress. Delivery state refresh unavailable; verify continuation before claiming completion.",
       memoryRecord: undefined,
     });
     expect(remember).not.toHaveBeenCalled();
