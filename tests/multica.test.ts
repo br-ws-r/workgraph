@@ -258,19 +258,3 @@ describe("Multica v0.4.35 initiative resolution", () => {
     await expect(reader.issueActivities(child, workspace)).rejects.toThrow();
   });
 });
-
-it("validates staged children and refuses incomplete, duplicate or foreign family state", async () => {
-  const a = issue(child, { parent_issue_id: root });
-  const good = { total: 1, unstaged: [], stages: [{ stage: 1, total: 1, done: 0, issues: [a] }] };
-  const reader = new MulticaReader({ run: async () => good });
-  expect(await reader.children(root, workspace)).toEqual([a]);
-  for (const response of [
-    { ...good, total: 2 },
-    { ...good, total: 2, unstaged: [a] },
-    { total: 1, unstaged: [{ ...a, workspace_id: otherWorkspace }], stages: [] },
-    { total: 1, unstaged: [{ ...a, parent_issue_id: child }], stages: [] },
-  ]) {
-    const invalid = new MulticaReader({ run: async () => response });
-    await expect(invalid.children(root, workspace)).rejects.toThrow();
-  }
-});

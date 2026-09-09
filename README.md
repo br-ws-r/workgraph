@@ -338,6 +338,3 @@ comment source link. Put the useful diagnosis, decision and verified result in
 the opening paragraph; use `initiative_memory_remember` for additional sourced,
 structured knowledge. Status-only events stay local. Existing history is not
 replayed when this capture mode is first enabled.
-
-See [the native delivery contract](docs/native-delivery-contract.md) for the
-Multica/Cognee ownership boundary, live delivery status and historical repair.
