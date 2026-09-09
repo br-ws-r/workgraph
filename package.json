@@ -1,6 +1,6 @@
 {
   "name": "@br-ws-r/workgraph",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Workspace-scoped Cognee memory bridge for Multica agents running OMP or Pi",
   "type": "module",
   "license": "MIT",
@@ -67,7 +67,8 @@
     "check": "npm run typecheck && npm test && npm run test:package",
     "prepare": "npm run build",
     "prepublishOnly": "npm run check",
-    "test:package": "npm run build && node scripts/package-smoke.mjs"
+    "test:package": "npm run build && node scripts/package-smoke.mjs",
+    "prebuild": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\""
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.84.4"
@@ -82,7 +83,6 @@
     "typescript": "5.9.2",
     "vitest": "3.2.7"
   },
-  "private": true,
   "bin": {
     "workgraph": "./dist/src/cli.js"
   },
@@ -90,5 +90,8 @@
     "@earendil-works/pi-coding-agent": {
       "optional": true
     }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

@@ -9,7 +9,7 @@ import {
   type InitiativeResolution,
   type MulticaWorkspace,
 } from "./multica.js";
-import { summarizeActivity, summarizeHandoff } from "./activity.js";
+import { summarizeActivity, inspectHandoff } from "./activity.js";
 import { recallValidMemories } from "./recall.js";
 import { WorkgraphOutbox, type TimelineEntry, type TimelineFilter } from "./outbox.js";
 import {
@@ -273,6 +273,84 @@ export class WorkgraphRuntime {
     }
   }
 
+  /** Fresh upstream workflow observations remain usable when semantic recall fails. */
+  async deliveryContext() {
+    const resolution = await this.requireFreshResolution();
+    const children = await this.multica.children(resolution.issue.id, resolution.workspace.id);
+    const summary = `Issue ${resolution.issue.identifier}: ${resolution.issue.status_category ?? resolution.issue.status}.`
+      + ` Parent: ${resolution.parent?.identifier ?? "none"}.`
+      + ` Direct children: ${children.map((child) => `${child.identifier}=${child.status_category ?? child.status}`).join(", ") || "none"}.`;
+    const fingerprint = createHash("sha256").update(JSON.stringify({
+      summary, revision: resolution.issue.revision, parent: resolution.parent?.id, children: children.map((child) => child.id).sort(),
+    })).digest("hex");
+    if (!this.timeline(1, { eventId: `issue-state:${this.#scope!.issueId}:${fingerprint}` }).length) {
+      this.rememberVerified({ entityType: "Issue", authority: "observed",
+        entityIdentifier: `issue:${resolution.issue.identifier}`, entityLabel: `${resolution.issue.identifier} workflow state`,
+        summary, source: this.issueSource(), sourceRevision: String(resolution.issue.revision ?? fingerprint),
+        eventId: `issue-state:${this.#scope!.issueId}:${fingerprint}`,
+        relations: [
+          { type: "part_of", target: `initiative:${resolution.root.identifier}` },
+          ...(resolution.parent ? [{ type: "child_of" as const, target: `issue:${resolution.parent.identifier}` }] : []),
+        ],
+      }, resolution);
+    }
+    let activeRuns: Awaited<ReturnType<MulticaReader["activeRuns"]>> | undefined;
+    try { activeRuns = await this.multica.activeRuns(resolution.issue.id, resolution.workspace.id); }
+    catch { /* Unknown is not an empty queue. Keep the available issue/child facts. */ }
+    const currentTask = this.scope?.taskId ?? this.env.MULTICA_TASK_ID;
+    const otherRuns = activeRuns?.filter((run) => run.id !== currentTask);
+    const category = (issue: typeof resolution.issue) => (issue.status_category ?? issue.status).toLowerCase();
+    const terminal = (issue: typeof resolution.issue) => ["done", "cancelled", "canceled"].includes(category(issue));
+    const warnings: string[] = [];
+    if (activeRuns === undefined) warnings.push("active_runs_unavailable");
+    if (["todo", "in_progress", "in_review"].includes(category(resolution.issue))) {
+      if (activeRuns?.length === 0) warnings.push("open_issue_without_active_run");
+      else if (otherRuns?.length === 0) warnings.push("current_run_has_no_observed_successor");
+    }
+    if (!terminal(resolution.issue) && children.length > 0 && children.every(terminal)) {
+      warnings.push("all_children_terminal_acceptance_requires_review");
+    }
+    return {
+      authority: "multica", observedAt: new Date().toISOString(),
+      current: { identifier: resolution.issue.identifier, status: resolution.issue.status,
+        status_category: resolution.issue.status_category, parent: resolution.parent?.identifier },
+      children: children.map((child) => ({ identifier: child.identifier, status: child.status,
+        status_category: child.status_category })),
+      execution: { availability: activeRuns === undefined ? "unavailable" : "available",
+        activeRunCount: activeRuns?.length, otherActiveRunCount: otherRuns?.length,
+        currentRunObserved: activeRuns?.some((run) => run.id === currentTask) },
+      warnings,
+      handoffCapture: this.outbox.handoffCapture(resolution.workspace.id, resolution.issue.id),
+      recentHandoffs: this.timeline(50).filter((event) => event.eventType === "handoff_observed")
+        .slice(-5).map((event) => ({ summary: event.boundedSummary, source: event.source, timestamp: event.timestamp })),
+    };
+  }
+
+  /** Explicit bounded repair reconsiders comments skipped by an older parser, without resetting cursors. */
+  async repairHandoffs(since: string): Promise<number> {
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(since) || !Number.isFinite(Date.parse(since))) throw new Error("A valid since timestamp is required");
+    const resolution = await this.requireFreshResolution();
+    const result = await this.multica.issueActivities(resolution.issue.id, resolution.workspace.id);
+    if (result.truncated) throw new Error("Cannot repair truncated history; use a complete source export");
+    let captured = 0;
+    for (const comment of result.handoffs ?? []) {
+      if (Date.parse(comment.created_at) < Date.parse(since)) continue;
+      const { summary, reason } = inspectHandoff(comment);
+      this.outbox.auditHandoff(this.#scope!.workspaceId, this.#scope!.issueId, comment.id, reason);
+      if (!summary || this.timeline(1, { eventId: `multica-handoff:${comment.id}` }).length) continue;
+      this.rememberVerified({ entityType: "Handoff", authority: "observed", summary,
+        entityIdentifier: `handoff:${this.#scope!.issueIdentifier.toLowerCase()}:${createHash("sha256").update(comment.id).digest("hex").slice(0,16)}`,
+        entityLabel: `${this.#scope!.issueIdentifier} agent handoff`,
+        source: `${this.issueSource()}/comments/${comment.id}`, sourceRevision: comment.id,
+        relations: [{ type: "about", target: `issue:${this.#scope!.issueIdentifier}` }],
+        eventType: "handoff_observed", eventId: `multica-handoff:${comment.id}`, observedAt: comment.created_at,
+      }, resolution, false);
+      captured++;
+    }
+    this.scheduleFlush();
+    return captured;
+  }
+
   async workspaceContext(query: string, topK = 8, signal?: AbortSignal): Promise<WorkgraphWorkspaceContext> {
     const workspaceId = this.env.MULTICA_WORKSPACE_ID?.trim();
     if (!workspaceId) throw new Error("MULTICA_WORKSPACE_ID is required for workspace recall");
@@ -351,11 +429,14 @@ export class WorkgraphRuntime {
     const operation = this.#reconciliations.then(() => this.reconcileActivityNow());
     this.#reconciliations = operation.catch(() => undefined);
     const { resolution } = await operation;
+    let deliveryWarning = "";
+    try { await this.deliveryContext(); }
+    catch { deliveryWarning = " Delivery state refresh unavailable; verify continuation before claiming completion."; }
     this.scheduleFlush();
     const observedAt = new Date().toISOString();
     return this.append(
       "run_settled",
-      `Work on Multica issue ${resolution.issue.identifier} settled with authoritative status ${resolution.issue.status}.`,
+      `Work on Multica issue ${resolution.issue.identifier} settled with authoritative status ${resolution.issue.status}.${deliveryWarning}`,
       this.issueSource(),
       "observed",
       undefined,
@@ -572,7 +653,8 @@ export class WorkgraphRuntime {
     }
     for (const comment of result.handoffs ?? []) {
       if (this.outbox.hasSeenActivity(this.#scope.workspaceId, this.#scope.issueId, comment.id)) continue;
-      const summary = summarizeHandoff(comment);
+      const { summary, reason } = inspectHandoff(comment);
+      this.outbox.auditHandoff(this.#scope!.workspaceId, this.#scope!.issueId, comment.id, reason);
       if (summary) {
         this.rememberVerified({
           entityType: "Handoff", authority: "observed", summary,

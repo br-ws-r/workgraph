@@ -258,3 +258,37 @@ describe("Multica v0.4.35 initiative resolution", () => {
     await expect(reader.issueActivities(child, workspace)).rejects.toThrow();
   });
 });
+
+it("validates staged children and refuses incomplete, duplicate or foreign family state", async () => {
+  const a = issue(child, { parent_issue_id: root });
+  const good = { total: 1, unstaged: [], stages: [{ stage: 1, total: 1, done: 0, issues: [a] }] };
+  const reader = new MulticaReader({ run: async () => good });
+  expect(await reader.children(root, workspace)).toEqual([a]);
+  for (const response of [
+    { ...good, total: 2 },
+    { ...good, total: 2, unstaged: [a] },
+    { total: 1, unstaged: [{ ...a, workspace_id: otherWorkspace }], stages: [] },
+    { total: 1, unstaged: [{ ...a, parent_issue_id: child }], stages: [] },
+  ]) {
+    const invalid = new MulticaReader({ run: async () => response });
+    await expect(invalid.children(root, workspace)).rejects.toThrow();
+  }
+});
+
+describe("upstream active-run evidence", () => {
+  const active = { id: task, agent_id: agent, workspace_id: workspace, issue_id: child, status: "running" };
+  it("reads the existing scoped upstream command", async () => {
+    const run = vi.fn(async (_command: string, _args: string[]) => [active]);
+    expect(await new MulticaReader({ run }).activeRuns(child, workspace)).toEqual([active]);
+    expect(run).toHaveBeenCalledWith("multica", ["--workspace-id", workspace, "issue", "runs", child, "--active", "--output", "json"]);
+  });
+  it.each([
+    [{ ...active, workspace_id: root }], [{ ...active, issue_id: root }],
+    [{ ...active, status: "completed" }], [active, active], [{}], { runs: [] },
+  ].map((value) => ({ value })))("rejects invalid or misleading active evidence: $value", async ({ value }) => {
+    await expect(new MulticaReader({ run: async () => value }).activeRuns(child, workspace)).rejects.toThrow();
+  });
+  it("accepts a confirmed empty response", async () => {
+    expect(await new MulticaReader({ run: async () => [] }).activeRuns(child, workspace)).toEqual([]);
+  });
+});

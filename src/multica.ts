@@ -236,6 +236,43 @@ export class MulticaReader {
     }).sort((a, b) => String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? ""))).slice(0, limit);
   }
 
+  /** Exact direct children only; incomplete or foreign responses cannot imply completion. */
+  async children(issueId: string, workspaceId: string): Promise<MulticaIssue[]> {
+    const workspace = requiredUuid(workspaceId, "Multica workspace");
+    const parent = requiredUuid(issueId, "Multica issue");
+    const value = await this.#run(this.#binary, [
+      ...workspacePrefix(workspace), "issue", "children", parent, "--output", "json",
+    ]);
+    const result = z.object({ total: z.number().int().nonnegative(),
+      unstaged: z.array(MulticaIssueSchema),
+      stages: z.array(z.object({ issues: z.array(MulticaIssueSchema) })),
+    }).parse(value);
+    const children = [...result.unstaged, ...result.stages.flatMap((stage) => stage.issues)];
+    if (children.length !== result.total || new Set(children.map((child) => child.id.toLowerCase())).size !== children.length
+      || children.some((child) => child.workspace_id.toLowerCase() !== workspace || child.parent_issue_id?.toLowerCase() !== parent)) {
+      throw new Error("Multica returned incomplete or foreign children");
+    }
+    return children;
+  }
+
+  /** Advisory in-flight work on this exact issue, never a dispatch receipt. */
+  async activeRuns(issueId: string, workspaceId: string) {
+    const workspace = requiredUuid(workspaceId, "Multica workspace");
+    const issue = requiredUuid(issueId, "Multica issue");
+    const result = await this.#run(this.#binary, [
+      ...workspacePrefix(workspace), "issue", "runs", issue, "--active", "--output", "json",
+    ]);
+    const runs = z.array(z.object({
+      id: UuidSchema, issue_id: UuidSchema, workspace_id: UuidSchema, agent_id: UuidSchema,
+      status: z.enum(["queued", "dispatched", "running", "waiting_local_directory"]),
+    })).parse(result);
+    if (new Set(runs.map((run) => run.id.toLowerCase())).size !== runs.length
+      || runs.some((run) => run.workspace_id.toLowerCase() !== workspace || run.issue_id.toLowerCase() !== issue)) {
+      throw new Error("Multica returned duplicate or foreign active runs");
+    }
+    return runs;
+  }
+
   async issueActivities(issueId: string, workspaceId?: string): Promise<MulticaActivityResult> {
     const expectedWorkspace = requiredUuid(workspaceId, "Multica workspace");
     const expectedIssue = requiredUuid(issueId, "Multica issue");

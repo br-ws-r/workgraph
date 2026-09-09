@@ -4,26 +4,50 @@
 
 | Route | Build location | Authentication | Current support |
 | --- | --- | --- | --- |
+| npmjs registry | Build machine/CI | Publish: `developers` team of the `br-ws-r` npm org with 2FA; install: none (public package) | Published as `@br-ws-r/workgraph` |
 | npm install from Git commit | Target server, through `prepare` | Git credentials if source is private | Ready; no registry needed |
 | npm tarball | Build machine/CI | Access to the transferred artifact | Ready; prebuilt JavaScript |
 | GitHub Packages | Build machine/CI | Registry token and package read permission | Documented future publishing option |
-| npm registry | Build machine/CI | npm account/package permissions | Not published |
 
-The repository is currently public. `private: true` in package.json blocks npm
-publication, not Git reads or tarball creation. To keep source distribution
-confidential, repository visibility/access must be configured separately. Nothing
-in this refactor changes repository visibility or publishes a package.
+The repository and the npmjs package are both public. Git source installs and
+tarballs remain supported routes. To keep source distribution confidential,
+repository visibility/access must be configured separately; the public npmjs
+package is not a private distribution channel.
 
 Allowing a GitHub repository as a trusted source in a host is not authentication.
 The service account running installation also needs Git read access. A private
 GitHub Packages package has its own registry permissions, independent of whether
 a host trusts a repository.
 
-## Install a pinned Git source
+## Install from the npm registry
 
-Install Node 22.19+ and Git on the target server. Install and authenticate Multica
+Install Node 22.19+ on the target server. Install and authenticate Multica
 against the intended Multica server as the agent's OS user. Install either OMP or
 Pi separately; Workgraph does not install a harness into the application.
+
+The package is public on npmjs; consumers need no token and no `.npmrc` entry:
+
+```bash
+mkdir -p "$HOME/workgraph-install"
+cd "$HOME/workgraph-install"
+npm init -y
+npm install --save-exact '@br-ws-r/workgraph@<version>'
+omp plugin link "$PWD/node_modules/@br-ws-r/workgraph"
+# For Pi:
+# pi install "$PWD/node_modules/@br-ws-r/workgraph"
+npx --no-install workgraph doctor
+```
+
+Registry installs ship prebuilt JavaScript; no build runs on the target and the
+installed runtime retains only Zod and TypeBox. Preserve this application's
+package.json and package-lock.json; re-deployment uses `npm ci` from those files.
+
+Publishing is restricted to members of the `developers` team of the `br-ws-r`
+npm organization with two-factor authentication enabled. `npm publish` runs the
+full check suite through `prepublishOnly`; `publishConfig.access` is `public`,
+so a scoped publish cannot accidentally default to a paid private package.
+
+## Install a pinned Git source
 
 ```bash
 mkdir -p "$HOME/workgraph-install"
@@ -106,8 +130,8 @@ npx --no-install workgraph doctor
 
 Keep the artifact accessible wherever a lockfile uses that tarball path. A tarball
 still needs npm access or a populated package cache for its runtime dependencies;
-it is not a bundled offline executable. Until releases have distinct versions,
-record the Git commit and tarball checksum alongside version `0.1.0`.
+it is not a bundled offline executable. Record the Git commit and tarball
+checksum alongside the packaged version for every transferred artifact.
 
 ## Optional future private GitHub Packages publishing
 

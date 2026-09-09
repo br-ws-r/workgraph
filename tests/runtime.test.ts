@@ -610,7 +610,7 @@ describe("Workgraph workspace runtime", () => {
     instance.outbox.close();
   });
 
-  it("keeps a generic settled status in the exact timeline without semantic delivery", async () => {
+  it("retains local settlement and reports unavailable delivery refresh without inventing graph state", async () => {
     const resolved = resolution();
     const multica = new MulticaReader({ run: vi.fn() });
     multica.resolveIssue = vi.fn(async () => resolved);
@@ -624,7 +624,7 @@ describe("Workgraph workspace runtime", () => {
 
     expect(settled).toMatchObject({
       eventType: "run_settled",
-      boundedSummary: "Work on Multica issue B-185 settled with authoritative status in_progress.",
+      boundedSummary: "Work on Multica issue B-185 settled with authoritative status in_progress. Delivery state refresh unavailable; verify continuation before claiming completion.",
       memoryRecord: undefined,
     });
     expect(remember).not.toHaveBeenCalled();

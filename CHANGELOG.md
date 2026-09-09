@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.2.0
+
+- Fix handoff capture for actual dash/colon/Markdown and merged/decision formats;
+  expose rejection counts and add bounded, idempotent repair of skipped comments.
+- Record explicit issue/parent graph edges and inject live direct-child states
+  and local delivery context independently of Cognee recall.
+- Read validated active runs through the existing upstream Multica CLI. Expose
+  missing execution evidence and terminal-child acceptance warnings without
+  dispatching agents, introducing a scheduler or requiring a Multica fork.
+- Clean generated output before builds so removed modules cannot leak into the
+  public npm tarball; preserve the 0.2.0 registry release configuration.
+
 - Capture bounded, sourced agent handoff narratives as observed memory; retain
   generic status/task activity only in the exact SQLite timeline. Baseline old
   comments without replaying them, preserving all existing data.
@@ -28,8 +40,9 @@
 - Reject Cognee redirects and omit raw HTTP error bodies from persisted errors.
 - Verify installed npm artifacts under Node/Bun and document pinned Git/tarball
   distribution, private registry options, self-hosting, backup and recovery.
-- Block accidental registry publication with `private: true`; Git/tarball installs
-  remain supported. No v3 data migration is required.
+- Publish publicly on npmjs as `@br-ws-r/workgraph` (`publishConfig.access:
+  public`); Git source and tarball installs remain supported. No v3 data
+  migration is required.
 
 - Return a stable event ID from queued writes and allow exact event/entity
   lookup and explicit/activity filtering in the local initiative timeline.

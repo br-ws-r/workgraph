@@ -16,6 +16,7 @@ const run = (command, args) => execFileSync(command, args, { cwd: consumer, env,
 try {
   // Build occurs before this script; ignore lifecycle scripts to pack those exact artifacts.
   const [packed] = JSON.parse(run(npm, ["pack", root, "--ignore-scripts", "--json", "--pack-destination", consumer]));
+  assert(!packed.files.some((file) => /followups/.test(file.path)), "Removed scheduler must not ship in the tarball");
   assert(packed.files.some((file) => file.path === "dist/src/cli.js"));
   assert(packed.files.every((file) => /^(dist\/|docs\/|README.md$|LICENSE$|CHANGELOG.md$|package.json$|\.env\.example$)/.test(file.path)), "Unexpected package contents");
   writeFileSync(join(consumer, "package.json"), JSON.stringify({ private: true, type: "module" }));
