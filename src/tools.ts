@@ -61,6 +61,21 @@ export function registerTools(
   });
 
   pi.registerTool({
+    ...writeHostOptions,
+    name: "initiative_delivery_status", label: "Initiative Delivery Status",
+    description: "Read fresh Multica children and issue status. Refreshes sourced issue graph state; Multica owns dispatch and completion.",
+    parameters: Type.Object({}),
+    async execute() { return result(await runtime.deliveryContext()); },
+  });
+  pi.registerTool({
+    ...writeHostOptions,
+    name: "initiative_handoffs_repair", label: "Repair Initiative Handoffs",
+    description: "Reconsider authored handoffs on the selected issue since an explicit timestamp, including previously skipped comments. Idempotent; rejects incomplete history and retains provenance. Queues semantic delivery only.",
+    parameters: Type.Object({ since: Type.String({ minLength: 1, maxLength: 64 }) }),
+    async execute(_id, params) { return result({ queued: await runtime.repairHandoffs(params.since) }); },
+  });
+
+  pi.registerTool({
     ...readHostOptions,
     name: "initiative_memory_recall",
     label: "Recall Initiative Memory",

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Read native Multica delivery continuations and project sourced issue, parent,
+  agent and run relationships using `multica-delivery/v1`.
+- Capture real handoff prefixes, audit skipped evidence and offer bounded,
+  idempotent history repair. Keep routing entirely in Multica.
+
+
 - Capture bounded, sourced agent handoff narratives as observed memory; retain
   generic status/task activity only in the exact SQLite timeline. Baseline old
   comments without replaying them, preserving all existing data.
