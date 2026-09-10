@@ -80,55 +80,45 @@ Install your harness from its official guide:
 [Multica CLI](https://github.com/multica-ai/multica/blob/v0.4.35/CLI_INSTALL.md)
 against the intended server **as the OS user that launches the agents**.
 
-## Install on a server
+## Install
 
-Install the published package from npmjs. The package is public: consumers need
-no token and no `.npmrc` entry.
+Requires Node 22.19+ and an installed harness (OMP or Pi).
+
+**OMP:**
 
 ```bash
-# An application directory owned by the agent service user.
-mkdir -p "$HOME/workgraph-install"
-cd "$HOME/workgraph-install"
-npm init -y
-# Replace the placeholder with the approved version.
-npm install --save-exact '@br-ws-r/workgraph@<version>'
-
-# Register the installed package with the harness used on this server.
-omp plugin link "$PWD/node_modules/@br-ws-r/workgraph"
-# Pi remains supported; use this instead for a Pi installation:
-# pi install "$PWD/node_modules/@br-ws-r/workgraph"
+omp plugin install @br-ws-r/workgraph
 ```
 
-Alternatively, choose an approved commit from this repository. The server needs
-Git access to the source; if the repository is private, configure a read-only
-deploy key or a credential helper first. Do not embed tokens in package URLs.
+**Pi:**
 
 ```bash
-mkdir -p "$HOME/workgraph-install"
-cd "$HOME/workgraph-install"
-npm init -y
-# Replace the placeholder with the approved full Git commit SHA.
+pi install npm:@br-ws-r/workgraph
+```
+
+Both fetch the published npm package and register the Workgraph extension.
+Restart the harness afterwards. To pin or upgrade, append a version:
+`@br-ws-r/workgraph@0.2.0` (Pi: `npm:@br-ws-r/workgraph@0.2.0`).
+
+### Install from source
+
+```bash
+mkdir -p "$HOME/workgraph-install" && cd "$HOME/workgraph-install" && npm init -y
 npm install --save-exact 'git+https://github.com/br-ws-r/workgraph.git#<commit-sha>'
-
-omp plugin link "$PWD/node_modules/@br-ws-r/workgraph"
-# Pi remains supported; use this instead for a Pi installation:
-# pi install "$PWD/node_modules/@br-ws-r/workgraph"
+omp plugin link "$PWD/node_modules/@br-ws-r/workgraph"   # OMP
+pi install "$PWD/node_modules/@br-ws-r/workgraph"        # Pi
 ```
 
-Git installation runs the package's `prepare` build. Keep the resulting
-application manifest and lockfile, and keep the installation directory in place:
-host registration points to it. Restart the harness after upgrades.
+The Git install builds through the package `prepare` hook; keep the directory
+in place, registration points to it. For tarballs, private sources and
+rollback, see [distribution and deployment](docs/deployment.md).
 
-For a prebuilt tarball, private repository access, repeatable deployment with
-`npm ci`, GitHub Packages, and rollback, see
-[distribution and deployment](docs/deployment.md). No registry publication is
-needed for this route.
-
-`npx`/`npm exec` runs the diagnostic CLI. Memory itself runs inside OMP or Pi:
+The diagnostic CLI runs straight from the published package. Memory itself runs
+inside OMP or Pi:
 
 ```bash
-npx --no-install workgraph doctor
-npx --no-install workgraph doctor --online --json
+npm exec --package=@br-ws-r/workgraph -- workgraph doctor
+npm exec --package=@br-ws-r/workgraph -- workgraph doctor --online --json
 ```
 
 The default check reads configuration and checks the directory; it creates no
